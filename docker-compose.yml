@@ -1,0 +1,33 @@
+# Mock business services, one process and one SQLite database each.
+# Configuration comes from .env via env_file; nothing secret belongs in this file.
+
+x-service: &service
+  build: .
+  env_file: .env
+  environment:
+    AGENTCHAOS_DATA_DIR: /app/data
+  volumes:
+    - ./data:/app/data
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(urllib.request.urlopen('http://localhost:8000/health').status != 200)"]
+    interval: 5s
+    timeout: 3s
+    retries: 5
+
+services:
+  orders:
+    <<: *service
+    command: ["uvicorn", "agentchaos.services.asgi:orders", "--factory", "--host", "0.0.0.0", "--port", "8000"]
+    ports: ["8101:8000"]
+  inventory:
+    <<: *service
+    command: ["uvicorn", "agentchaos.services.asgi:inventory", "--factory", "--host", "0.0.0.0", "--port", "8000"]
+    ports: ["8102:8000"]
+  billing:
+    <<: *service
+    command: ["uvicorn", "agentchaos.services.asgi:billing", "--factory", "--host", "0.0.0.0", "--port", "8000"]
+    ports: ["8103:8000"]
+  notifications:
+    <<: *service
+    command: ["uvicorn", "agentchaos.services.asgi:notifications", "--factory", "--host", "0.0.0.0", "--port", "8000"]
+    ports: ["8104:8000"]
