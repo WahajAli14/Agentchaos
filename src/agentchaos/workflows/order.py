@@ -19,6 +19,31 @@ def _capture(key: str) -> Any:
     return capture
 
 
+def _first(rows: Any, **where: Any) -> Mapping[str, Any] | None:
+    if not isinstance(rows, list):
+        return None
+    for row in rows:
+        if all(row.get(key) == value for key, value in where.items()):
+            return dict(row)
+    return None
+
+
+def _live_order(ctx: Context, rows: Any) -> Mapping[str, Any] | None:
+    if not isinstance(rows, list):
+        return None
+    for row in rows:
+        same = row["sku"] == ctx["sku"] and row["quantity"] == ctx["quantity"]
+        if same and row["status"] != "cancelled":
+            return dict(row)
+    return None
+
+
+def _confirmed(ctx: Context, row: Any) -> Mapping[str, Any] | None:
+    if isinstance(row, dict) and row.get("status") == "confirmed":
+        return row
+    return None
+
+
 def _release(ctx: Context) -> StepRequest | None:
     if "reservation_id" not in ctx:
         return None
@@ -57,6 +82,7 @@ ORDER_STEPS: tuple[WorkflowStep, ...] = (
         verify=lambda ctx: StepRequest(
             "orders", "GET", "/orders", params={"customer_id": ctx["customer_id"]}
         ),
+        find_committed=_live_order,
         compensation=_cancel,
     ),
     WorkflowStep(
@@ -73,6 +99,7 @@ ORDER_STEPS: tuple[WorkflowStep, ...] = (
         verify=lambda ctx: StepRequest(
             "inventory", "GET", "/reservations", params={"order_id": ctx["order_id"]}
         ),
+        find_committed=lambda ctx, rows: _first(rows, status="active"),
         compensation=_release,
     ),
     WorkflowStep(
@@ -92,6 +119,7 @@ ORDER_STEPS: tuple[WorkflowStep, ...] = (
         verify=lambda ctx: StepRequest(
             "billing", "GET", "/invoices", params={"order_id": ctx["order_id"]}
         ),
+        find_committed=lambda ctx, rows: _first(rows, status="issued"),
         compensation=_void,
     ),
     WorkflowStep(
@@ -107,6 +135,7 @@ ORDER_STEPS: tuple[WorkflowStep, ...] = (
         capture=lambda ctx, body: None,
         verify=lambda ctx: StepRequest("orders", "GET", f"/orders/{ctx['order_id']}"),
         # A confirmed order cannot be un-confirmed; later failures need a human.
+        find_committed=_confirmed,
         compensation=None,
     ),
     WorkflowStep(
@@ -127,6 +156,7 @@ ORDER_STEPS: tuple[WorkflowStep, ...] = (
         verify=lambda ctx: StepRequest(
             "notifications", "GET", "/notifications", params={"order_id": ctx["order_id"]}
         ),
+        find_committed=lambda ctx, rows: _first(rows, kind="order_confirmed"),
         compensation=None,
         optional=True,
     ),

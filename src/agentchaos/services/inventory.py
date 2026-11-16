@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import Column, Connection, Integer, MetaData, String, Table, insert, select, update
 
-from agentchaos.services.base import MockService, Rejected
+from agentchaos.services.base import MockService, Rejected, Unchanged
 from agentchaos.services.fixtures import Fixture
 
 
@@ -129,7 +129,7 @@ class InventoryService(MockService):
             def commit(conn: Connection) -> tuple[int, dict[str, Any]]:
                 reservation = self._reservation(conn, reservation_id)
                 if reservation["status"] == "released":
-                    return 200, reservation
+                    raise Unchanged(200, reservation)
                 conn.execute(
                     update(reservations)
                     .where(reservations.c.id == reservation_id)

@@ -75,6 +75,10 @@ class Rejected(Exception):
         self.body = body
 
 
+class Unchanged(Rejected):
+    """The request was valid but changed nothing (e.g. confirming a confirmed order)."""
+
+
 class AdvanceClock(BaseModel):
     ms: int = Field(ge=0)
 
@@ -222,7 +226,10 @@ class MockService:
                         status, _ = commit(conn)
                     phase = "deferred_committed"
                 except Rejected as rejected:
-                    status, phase = rejected.status, "deferred_rejected"
+                    status = rejected.status
+                    phase = (
+                        "deferred_noop" if isinstance(rejected, Unchanged) else "deferred_rejected"
+                    )
                 self._log(operation, key, rhash, phase, status)
 
             self.runtime.scheduler.schedule(
@@ -241,7 +248,8 @@ class MockService:
                     self._remember(conn, key, rhash, status, body)
             phase = "committed"
         except Rejected as rejected:
-            status, body, phase = rejected.status, rejected.body, "rejected"
+            status, body = rejected.status, rejected.body
+            phase = "noop" if isinstance(rejected, Unchanged) else "rejected"
             if honour_key and key is not None:
                 with self.engine.begin() as conn:
                     self._remember(conn, key, rhash, status, body)

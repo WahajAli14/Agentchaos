@@ -1,6 +1,6 @@
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 import pytest
@@ -8,6 +8,9 @@ import pytest
 from agentchaos.interfaces import Context, WorkflowSpec
 from agentchaos.results.store import ResultsStore
 from agentchaos.services.cluster import ServiceCluster
+
+if TYPE_CHECKING:
+    from agentchaos.engine import Engine
 
 SEED = 42
 
@@ -52,3 +55,12 @@ async def run_workflow(
         if step.name == stop_after:
             break
     return ctx
+
+
+@pytest.fixture
+def engine(cluster: ServiceCluster, store: ResultsStore, tmp_path: Path) -> Iterator["Engine"]:
+    from agentchaos.engine import Engine
+
+    engine = Engine(cluster, store, tmp_path / "control")
+    yield engine
+    engine.close()

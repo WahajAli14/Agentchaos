@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import Column, Connection, Integer, MetaData, String, Table, insert, select, update
 
-from agentchaos.services.base import MockService, Rejected
+from agentchaos.services.base import MockService, Rejected, Unchanged
 
 
 class CreateOrder(BaseModel):
@@ -96,7 +96,7 @@ class OrdersService(MockService):
                 if order["status"] == "cancelled":
                     raise Rejected(409, {"error": "order_cancelled", "order_id": order_id})
                 if order["status"] == "confirmed":
-                    return 200, order
+                    raise Unchanged(200, order)
                 conn.execute(
                     update(orders)
                     .where(orders.c.id == order_id)
@@ -121,7 +121,7 @@ class OrdersService(MockService):
                 if order["status"] == "confirmed":
                     raise Rejected(409, {"error": "order_already_confirmed", "order_id": order_id})
                 if order["status"] == "cancelled":
-                    return 200, order
+                    raise Unchanged(200, order)
                 conn.execute(
                     update(orders)
                     .where(orders.c.id == order_id)

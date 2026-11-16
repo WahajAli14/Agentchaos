@@ -44,6 +44,7 @@ runs = Table(
     "runs",
     metadata,
     Column("run_id", String, primary_key=True),
+    Column("batch_id", String, nullable=True, index=True),
     Column("scenario", String, nullable=False),
     Column("workflow", String, nullable=False),
     Column("mode", String, nullable=False),  # deterministic | live
@@ -113,6 +114,9 @@ run_outcomes = Table(
     Column("classification", String, nullable=True),
     Column("final_state", String, nullable=False),
     Column("explanation", String, nullable=False),
+    # What the agent reported, as opposed to what the databases show.
+    Column("agent_believed_outcome", String, nullable=True),
+    Column("goal_achieved", Boolean, nullable=True),
     Column("tool_calls", Integer, nullable=False),
     Column("llm_calls", Integer, nullable=False),
     Column("prompt_tokens", Integer, nullable=False),
@@ -173,6 +177,7 @@ class ResultsStore:
         fault_type: str | None,
         controls: list[str],
         logical_ms: int,
+        batch_id: str | None = None,
         provider: str | None = None,
         model: str | None = None,
     ) -> None:
@@ -180,6 +185,7 @@ class ResultsStore:
             conn.execute(
                 insert(runs).values(
                     run_id=run_id,
+                    batch_id=batch_id,
                     scenario=scenario,
                     workflow=workflow,
                     mode=mode,
@@ -260,6 +266,8 @@ class ResultsStore:
         *,
         classification: Classification | None,
         explanation: str,
+        agent_believed_outcome: str | None = None,
+        goal_achieved: bool | None = None,
         metrics: RunMetrics | None = None,
     ) -> None:
         """Store the final outcome. Refuses any outcome the stored evidence does not support."""
@@ -288,6 +296,8 @@ class ResultsStore:
                     classification=classification.value if classification else None,
                     final_state=state.value,
                     explanation=explanation,
+                    agent_believed_outcome=agent_believed_outcome,
+                    goal_achieved=goal_achieved,
                     **asdict(metrics or RunMetrics()),
                 )
             )
@@ -327,3 +337,35 @@ class ResultsStore:
     def count_runs(self) -> int:
         with self.engine.connect() as conn:
             return int(conn.execute(select(func.count()).select_from(runs)).scalar_one())
+
+    def list_runs(self, batch_id: str | None = None) -> list[dict[str, Any]]:
+        """Runs joined with their outcome (outcome columns are None while unfinished)."""
+        query = (
+            select(runs, *[c for c in run_outcomes.c if c.name not in ("run_id", "recorded_at")])
+            .select_from(runs.outerjoin(run_outcomes, runs.c.run_id == run_outcomes.c.run_id))
+            .order_by(runs.c.recorded_at, runs.c.run_id)
+        )
+        if batch_id is not None:
+            query = query.where(runs.c.batch_id == batch_id)
+        with self.engine.connect() as conn:
+            return [dict(row._mapping) for row in conn.execute(query)]
+
+    def all_invariant_results(self, batch_id: str) -> list[dict[str, Any]]:
+        query = (
+            select(invariant_results)
+            .join(runs, runs.c.run_id == invariant_results.c.run_id)
+            .where(runs.c.batch_id == batch_id)
+        )
+        with self.engine.connect() as conn:
+            return [dict(row._mapping) for row in conn.execute(query)]
+
+    def latest_batch_id(self) -> str | None:
+        query = (
+            select(runs.c.batch_id)
+            .where(runs.c.batch_id.is_not(None))
+            .order_by(runs.c.recorded_at.desc(), runs.c.run_id.desc())
+            .limit(1)
+        )
+        with self.engine.connect() as conn:
+            row = conn.execute(query).first()
+        return row[0] if row else None

@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import Column, Connection, Integer, MetaData, String, Table, insert, select, update
 
-from agentchaos.services.base import MockService, Rejected
+from agentchaos.services.base import MockService, Rejected, Unchanged
 
 
 class CreateInvoice(BaseModel):
@@ -94,7 +94,7 @@ class BillingService(MockService):
             def commit(conn: Connection) -> tuple[int, dict[str, Any]]:
                 invoice = self._invoice(conn, invoice_id)
                 if invoice["status"] == "void":
-                    return 200, invoice
+                    raise Unchanged(200, invoice)
                 conn.execute(
                     update(invoices)
                     .where(invoices.c.id == invoice_id)
