@@ -369,3 +369,22 @@ class ResultsStore:
         with self.engine.connect() as conn:
             row = conn.execute(query).first()
         return row[0] if row else None
+
+    def list_batches(self) -> list[dict[str, Any]]:
+        """Batches newest first, with run count and the modes and models they contain."""
+        query = (
+            select(
+                runs.c.batch_id,
+                func.count().label("runs"),
+                func.min(runs.c.seed).label("first_seed"),
+                func.max(runs.c.seed).label("last_seed"),
+                func.max(runs.c.recorded_at).label("recorded_at"),
+                func.group_concat(runs.c.mode.distinct()).label("modes"),
+                func.group_concat(runs.c.model.distinct()).label("models"),
+            )
+            .where(runs.c.batch_id.is_not(None))
+            .group_by(runs.c.batch_id)
+            .order_by(func.max(runs.c.recorded_at).desc(), runs.c.batch_id.desc())
+        )
+        with self.engine.connect() as conn:
+            return [dict(row._mapping) for row in conn.execute(query)]

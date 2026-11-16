@@ -124,7 +124,7 @@ async def test_api_serves_run_detail_with_three_lanes_and_mismatch(engine: Engin
             batch_id="b",
         )
     )
-    transport = httpx.ASGITransport(app=create_app(engine.store))
+    transport = httpx.ASGITransport(app=create_app(engine.store, web_dist=Path("/nonexistent")))
     async with httpx.AsyncClient(transport=transport, base_url="http://api") as client:
         runs = (await client.get("/api/runs")).json()
         assert [r["run_id"] for r in runs] == [summary.run_id]
@@ -141,6 +141,7 @@ async def test_api_serves_run_detail_with_three_lanes_and_mismatch(engine: Engin
 
         assert (await client.get("/api/runs/run_missing")).status_code == 404
         bench = (await client.get("/api/benchmark")).json()
+        bench = (await client.get("/api/benchmark?batch_id=b")).json()
         assert bench["batch_id"] == "b" and bench["cells"][0]["runs"] == 1
         for path in ("/", f"/runs/{summary.run_id}"):
             page = await client.get(path)
@@ -148,10 +149,15 @@ async def test_api_serves_run_detail_with_three_lanes_and_mismatch(engine: Engin
 
 
 async def test_api_with_no_runs(store: ResultsStore) -> None:
-    transport = httpx.ASGITransport(app=create_app(store))
+    transport = httpx.ASGITransport(app=create_app(store, web_dist=Path("/nonexistent")))
     async with httpx.AsyncClient(transport=transport, base_url="http://api") as client:
         assert (await client.get("/api/runs")).json() == []
-        assert (await client.get("/api/benchmark")).json() == {"batch_id": None, "cells": []}
+        assert (await client.get("/api/benchmark")).json() == {
+            "batch_id": None,
+            "cells": [],
+            "deltas": [],
+        }
+        assert (await client.post("/api/runs", json={})).status_code == 503
 
 
 def test_pages_follow_the_design_bans() -> None:
@@ -160,3 +166,54 @@ def test_pages_follow_the_design_bans() -> None:
         assert "gradient" not in text and "blur" not in text and "box-shadow" not in text
         assert not re.search(r"border-radius:\s*([7-9]|\d{2,})px", text)
         assert not re.search("[\U0001f300-\U0001faff☀-➿]", text)
+
+
+async def test_api_runs_a_scenario_and_the_matrix(engine: Engine) -> None:
+    app = create_app(engine.store, engine, web_dist=Path("/nonexistent"))
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://api"
+    ) as client:
+        info = (await client.get("/api/scenarios")).json()
+        assert info["can_run"] is True
+        assert [f["fault_type"] for f in info["faults"]] == list(FAULT_TYPES)
+        assert {c["name"] for c in info["controls"]} >= {"saga", "verify_after_write"}
+
+        started = await client.post(
+            "/api/runs",
+            json={"fault_type": "timeout_after_commit", "target_step": "create_invoice"},
+        )
+        assert started.status_code == 201
+        assert started.json()["classification"] == "undetected_violation"
+        fixed = await client.post(
+            "/api/runs",
+            json={
+                "fault_type": "timeout_after_commit",
+                "target_step": "create_invoice",
+                "controls": ["verify_after_write"],
+            },
+        )
+        assert fixed.json()["classification"] == "verified_recovery"
+        detail = await client.get(f"/api/runs/{fixed.json()['run_id']}")
+        assert detail.json()["run"]["batch_id"] == "adhoc"
+        for bad in ({"fault_type": "nope"}, {"controls": ["prayer"]}):
+            assert (await client.post("/api/runs", json=bad)).status_code == 422
+
+        batch = (await client.post("/api/benchmark", json={"seeds": 1})).json()["batch_id"]
+        bench = (await client.get("/api/benchmark")).json()
+        assert bench["batch_id"] == batch  # latest matrix batch, not the ad hoc runs
+        assert len(bench["cells"]) == 18 and len(bench["deltas"]) == 3
+        cell = bench["cells"][0]
+        assert cell["violations_per_run_mean"] is not None
+        assert cell["violations_per_run_variance"] is not None
+        listed = (await client.get("/api/batches")).json()
+        assert {b["batch_id"] for b in listed} == {"adhoc", batch}
+        assert next(b for b in listed if b["batch_id"] == batch)["runs"] == 18
+
+
+def test_variance_is_population_variance() -> None:
+    from agentchaos.metrics import mean, variance
+
+    assert mean([]) is None and variance([]) is None
+    assert mean([0, 0, 2, 2]) == 1.0
+    assert variance([0, 0, 2, 2]) == 1.0
+    assert variance([3, 3, 3]) == 0.0

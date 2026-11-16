@@ -23,6 +23,18 @@ def percentile(values: Sequence[float], q: float) -> float | None:
     return ordered[rank - 1]
 
 
+def mean(values: Sequence[float]) -> float | None:
+    return sum(values) / len(values) if values else None
+
+
+def variance(values: Sequence[float]) -> float | None:
+    """Population variance across the runs in a cell."""
+    avg = mean(values)
+    if avg is None:
+        return None
+    return sum((v - avg) ** 2 for v in values) / len(values)
+
+
 def controls_label(controls: Sequence[str]) -> str:
     return "+".join(sorted(controls)) if controls else "none"
 
@@ -39,6 +51,7 @@ class Cell:
     tool_calls: int = 0
     latencies: list[float] = field(default_factory=list)
     run_ids: list[str] = field(default_factory=list)
+    violations_per_run: list[int] = field(default_factory=list)
 
     @property
     def verified(self) -> int:
@@ -60,6 +73,8 @@ class Cell:
             "duplicate_requests": self.duplicate_requests,
             "duplicate_committed_operations": self.duplicate_committed_operations,
             "tool_calls": self.tool_calls,
+            "violations_per_run_mean": mean(self.violations_per_run),
+            "violations_per_run_variance": variance(self.violations_per_run),
             "latency_p50_ms": percentile(self.latencies, 50),
             "latency_p95_ms": percentile(self.latencies, 95),
             "run_ids": self.run_ids,
@@ -85,9 +100,13 @@ def benchmark_matrix(store: ResultsStore, batch_id: str) -> list[Cell]:
         cell.tool_calls += run["tool_calls"]
         if run["latency_ms"] is not None:
             cell.latencies.append(run["latency_ms"])
+    per_run: Counter[str] = Counter()
     for result in store.all_invariant_results(batch_id):
         if not result["passed"]:
             by_run[result["run_id"]].violations[result["invariant"]] += len(result["violations"])
+            per_run[result["run_id"]] += len(result["violations"])
+    for run_id, cell in by_run.items():
+        cell.violations_per_run.append(per_run[run_id])
     return list(cells.values())
 
 
