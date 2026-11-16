@@ -1,0 +1,3 @@
+"""AgentChaos: AI integration reliability lab."""
+
+__version__ = "0.1.0"

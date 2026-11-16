@@ -1,0 +1,30 @@
+# secrets
+.env
+.env.*
+!.env.example
+
+# runtime data (mock service DBs, results DB, backups)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+data/
+backups/
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+*.egg-info/
+
+# frontend / build
+node_modules/
+dist/
+playwright-report/
+test-results/
+
+.DS_Store
