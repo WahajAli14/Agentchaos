@@ -18,6 +18,13 @@ class AgentResult:
     context: Context
     completed_steps: list[str] = field(default_factory=list)
     failed_step: str | None = None
+    # Live mode only. Deterministic and replay runs never call an LLM.
+    llm_calls: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    wall_latency_ms: float | None = None
+    # Recorded tool-call decisions, replayable with ReplayAgent.
+    trace: list[dict[str, Any]] = field(default_factory=list)
 
 
 class ScriptedAgent:

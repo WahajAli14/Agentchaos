@@ -139,7 +139,13 @@ FORBIDDEN_ATTRS: dict[str, set[str]] = {
 }
 FORBIDDEN_IMPORTS = {"time", "uuid", "secrets"}
 # The results store stamps rows with the real time they were recorded.
-ALLOWED = {("results/store.py", "func", "current_timestamp")}
+# Live mode talks to a real LLM: it measures real latency and backs off in real time.
+ALLOWED = {
+    ("results/store.py", "func", "current_timestamp"),
+    ("live_agent.py", "time", "perf_counter"),
+    ("llm.py", "asyncio", "sleep"),
+}
+ALLOWED_IMPORTS = {("live_agent.py", "time")}
 
 
 def test_source_has_no_wall_clock_or_unseeded_randomness() -> None:
@@ -162,6 +168,6 @@ def test_source_has_no_wall_clock_or_unseeded_randomness() -> None:
                 offences.extend(
                     f"{rel}:{node.lineno} import {alias.name}"
                     for alias in node.names
-                    if alias.name in FORBIDDEN_IMPORTS
+                    if alias.name in FORBIDDEN_IMPORTS and (rel, alias.name) not in ALLOWED_IMPORTS
                 )
     assert offences == []

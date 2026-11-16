@@ -1,0 +1,58 @@
+# LLM providers. All are called through one OpenAI-compatible client.
+# A provider is enabled only if its key (or URL, for Ollama) is set in .env.
+# Model ids and limits live here, never in code. Check each provider's current
+# model list before a run: free-tier model ids change.
+#
+# price_per_mtok_usd: the public list price used for estimated_cost_usd.
+#   null means unknown; the estimate is then reported as unknown, not guessed.
+# free_tier: true means nothing is actually charged, so billed_cost_usd is 0.
+providers:
+  groq:
+    priority: 1
+    base_url: https://api.groq.com/openai/v1
+    key_env: GROQ_API_KEY
+    model: openai/gpt-oss-120b
+    supports_tools: true
+    free_tier: true
+    rpm: 30
+    rpd: 1000
+    price_per_mtok_usd: {input: 0.15, output: 0.60}
+  mistral:
+    priority: 2
+    base_url: https://api.mistral.ai/v1
+    key_env: MISTRAL_API_KEY
+    model: mistral-small-latest
+    supports_tools: true
+    free_tier: true
+    rpm: 60
+    rpd: null
+    price_per_mtok_usd: null
+  openrouter:
+    priority: 3
+    base_url: https://openrouter.ai/api/v1
+    key_env: OPENROUTER_API_KEY
+    model: openrouter/free
+    supports_tools: true
+    free_tier: true
+    rpm: 20
+    rpd: 50
+    price_per_mtok_usd: null
+  gemini:
+    priority: 4
+    base_url: https://generativelanguage.googleapis.com/v1beta/openai
+    key_env: GEMINI_API_KEY
+    model: gemini-2.5-flash
+    supports_tools: true
+    free_tier: true
+    rpm: 10
+    rpd: 250
+    price_per_mtok_usd: null
+  ollama:
+    priority: 5
+    base_url_env: OLLAMA_BASE_URL
+    model: llama3.1
+    supports_tools: true
+    free_tier: true
+    rpm: null
+    rpd: null
+    price_per_mtok_usd: null

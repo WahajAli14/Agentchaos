@@ -1,4 +1,4 @@
-.PHONY: setup dev api test lint bench secrets
+.PHONY: setup dev api test lint bench live secrets
 
 # macOS can mark the editable-install .pth file hidden, which Python 3.12 then
 # skips; putting src on the path keeps `python -m agentchaos...` working anyway.
@@ -30,3 +30,8 @@ api:
 # appends the runs to data/results/results.db. Same seeds give the same numbers.
 bench:
 	uv run python -m agentchaos.bench --seeds $(SEEDS)
+
+# Live LLM smoke runs (needs a provider key in .env and AGENTCHAOS_LIVE_MODE_ENABLED=true).
+RUNS ?= 3
+live:
+	uv run python -m agentchaos.live smoke --runs $(RUNS)

@@ -10,12 +10,12 @@ classified.
 """
 
 import random
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
-from agentchaos.agent import ScriptedAgent
+from agentchaos.agent import AgentResult, ScriptedAgent
 from agentchaos.classifier import classify
 from agentchaos.controls import (
     CONTROL_NAMES,
@@ -34,11 +34,19 @@ from agentchaos.interfaces import (
     WorkflowSpec,
 )
 from agentchaos.invariants.base import CheckReport, InvariantChecker
+from agentchaos.llm import ProviderConfig, billed_cost_usd, estimated_cost_usd
 from agentchaos.proxy import FaultProxy, GroundTruthTracker, Recorder
 from agentchaos.results.states import Classification, ExecutionState
 from agentchaos.results.store import ResultsStore, RunMetrics
 from agentchaos.services.cluster import ServiceCluster
 from agentchaos.workflows.order import OrderWorkflow
+
+
+class AgentLike(Protocol):
+    async def run(self, workflow_input: dict[str, Any]) -> AgentResult: ...
+
+
+AgentFactory = Callable[[WorkflowSpec, CallNext, Recorder, str], AgentLike]
 
 SKUS = ("SKU-WIDGET", "SKU-GADGET")
 ARRIVAL_PHASES = ("committed", "rejected", "replayed", "accepted", "noop", "idempotency_conflict")
@@ -58,6 +66,7 @@ class RunConfig:
     reconcile_attempts: int = 3
     reconcile_interval_ms: int = 500
     batch_id: str | None = None
+    mode: str = "deterministic"  # deterministic | replay | live
 
     def __post_init__(self) -> None:
         unknown = set(self.controls) - set(CONTROL_NAMES)
@@ -75,6 +84,7 @@ class RunSummary:
     explanation: str
     report: CheckReport
     target_step: str | None
+    trace: list[dict[str, Any]] = field(default_factory=list)
 
 
 def workflow_input(rng: random.Random) -> dict[str, Any]:
@@ -154,10 +164,19 @@ class Engine:
             send = wrapped
         return send
 
-    async def run(self, config: RunConfig) -> RunSummary:
+    async def run(
+        self,
+        config: RunConfig,
+        agent_factory: "AgentFactory | None" = None,
+        provider: ProviderConfig | None = None,
+        order: dict[str, Any] | None = None,
+    ) -> RunSummary:
+        """Run one scenario. `agent_factory` swaps the scripted agent for a live
+        LLM agent or a trace replay; `provider` is recorded for live runs."""
         cluster, store = self.cluster, self.store
         rng = random.Random(config.seed)
-        order = workflow_input(rng)
+        seeded_order = workflow_input(rng)
+        order = order or seeded_order
         policy = (
             make_policy(config.fault_type, rng, config.target_step) if config.fault_type else None
         )
@@ -177,7 +196,9 @@ class Engine:
             batch_id=config.batch_id,
             scenario=config.scenario,
             workflow=self.spec.name,
-            mode="deterministic",
+            mode=config.mode,
+            provider=provider.name if provider else None,
+            model=provider.model if provider else None,
             seed=config.seed,
             fault_type=config.fault_type,
             controls=list(config.controls),
@@ -199,7 +220,11 @@ class Engine:
             proxy = FaultProxy(cluster, client, recorder, tracker, policy)
             controls = self._build_controls(config, recorder, run_id)
             send = self._chain(controls, proxy)
-            agent = ScriptedAgent(self.spec, send, recorder, run_id)
+            agent: AgentLike = (
+                agent_factory(self.spec, send, recorder, run_id)
+                if agent_factory
+                else ScriptedAgent(self.spec, send, recorder, run_id)
+            )
             result = await agent.run(order)
             if result.failed_step is not None:
                 failure = WorkflowFailure(
@@ -240,16 +265,24 @@ class Engine:
         checker = InvariantChecker(self.spec.invariants())
         duplicate_requests, duplicate_commits = count_duplicates(cluster)
 
+        tokens = (result.prompt_tokens, result.completion_tokens)
+
         def metrics() -> RunMetrics:
             return RunMetrics(
                 tool_calls=tool_calls,
                 duplicate_requests=duplicate_requests,
                 duplicate_committed_operations=duplicate_commits,
-                # Deterministic mode has no LLM: nothing billed, nothing to estimate.
-                billed_cost_usd=0.0,
-                estimated_cost_usd=0.0,
-                # Logical milliseconds until the agent and controls finished.
-                latency_ms=float(agent_done_ms),
+                llm_calls=result.llm_calls,
+                prompt_tokens=result.prompt_tokens,
+                completion_tokens=result.completion_tokens,
+                # No LLM call means nothing billed and nothing to estimate.
+                billed_cost_usd=billed_cost_usd(provider, *tokens) if provider else 0.0,
+                estimated_cost_usd=estimated_cost_usd(provider, *tokens) if provider else 0.0,
+                # Live: measured wall time of the agent loop. Otherwise logical
+                # milliseconds until the agent and controls finished.
+                latency_ms=result.wall_latency_ms
+                if result.wall_latency_ms is not None
+                else float(agent_done_ms),
             )
 
         if pending:
@@ -275,6 +308,7 @@ class Engine:
                 explanation,
                 report,
                 policy.target_step if policy else None,
+                result.trace,
             )
 
         # Let the orphan grace period elapse so "abandoned" is decidable.
@@ -317,6 +351,7 @@ class Engine:
             explanation,
             report,
             policy.target_step if policy else None,
+            result.trace,
         )
 
 
