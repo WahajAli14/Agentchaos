@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Run timeline</title>
+<style>
+  :root { --bg:#0E1013; --surface:#16191D; --border:#23272E; --text:#E6E8EB; --muted:#8B929C;
+          --accent:#2BB3A3; --ok:#4CAF7A; --warn:#D9A441; --esc:#E0823D; --bad:#E5534B; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:13px/1.45 "IBM Plex Sans",Inter,system-ui,sans-serif; }
+  code, .mono, td.t { font-family:"IBM Plex Mono","JetBrains Mono",ui-monospace,monospace; font-variant-numeric:tabular-nums; }
+  header { padding:16px 24px; border-bottom:1px solid var(--border); }
+  h1 { font-size:16px; margin:0 0 8px; font-weight:600; }
+  h2 { font-size:14px; margin:24px 24px 8px; font-weight:600; }
+  a { color:var(--accent); }
+  .meta { display:flex; flex-wrap:wrap; gap:8px 24px; color:var(--muted); font-size:12px; }
+  .meta b { color:var(--text); font-weight:500; }
+  .outcome { margin-top:12px; padding:8px 12px; border:1px solid var(--border); border-left-width:3px; background:var(--surface); border-radius:4px; }
+  .verified_recovery { border-left-color:var(--ok); } .partial_recovery { border-left-color:var(--warn); }
+  .manual_intervention_required { border-left-color:var(--esc); } .undetected_violation { border-left-color:var(--bad); }
+  .indeterminate { border-left-color:var(--muted); }
+  table { width:100%; border-collapse:collapse; table-layout:fixed; }
+  th { position:sticky; top:0; background:var(--surface); text-align:left; font-size:12px; font-weight:600; padding:8px; border-bottom:1px solid var(--border); }
+  td { padding:6px 8px; border-bottom:1px solid var(--border); vertical-align:top; overflow-wrap:anywhere; }
+  td.t, th.t { width:88px; text-align:right; color:var(--muted); }
+  td.lane { border-left:1px solid var(--border); }
+  .kind { font-weight:600; } .detail { color:var(--muted); font-size:12px; }
+  tr.mismatch td { background:#2A1D12; }
+  tr.mismatch .why { color:var(--esc); font-size:12px; margin-top:4px; }
+  .wrap { margin:0 24px 24px; border:1px solid var(--border); border-radius:4px; overflow:hidden; }
+  .err { margin:24px; padding:12px; border:1px solid var(--bad); border-radius:4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">Run</h1>
+  <div class="meta" id="meta"></div>
+  <div id="outcome"></div>
+</header>
+<h2>Timeline: what the agent did, what the proxy and API did, what the databases show</h2>
+<div class="wrap"><table>
+  <thead><tr><th class="t">logical ms</th><th>Agent decisions and tool calls</th><th>Injected faults and API responses</th><th>Ground truth (service databases)</th></tr></thead>
+  <tbody id="rows"></tbody>
+</table></div>
+<h2>Invariants checked against the service databases</h2>
+<div class="wrap"><table>
+  <thead><tr><th style="width:320px">Invariant</th><th style="width:120px">Result</th><th>Violations</th></tr></thead>
+  <tbody id="invariants"></tbody>
+</table></div>
+<p style="margin:0 24px 24px"><a href="/">All runs</a></p>
+<script>
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const LANES = ["agent", "proxy", "ground_truth"];
+function describe(e) {
+  const p = e.payload;
+  switch (e.kind) {
+    case "run_started": return `input ${JSON.stringify(p.workflow_input)}; controls [${p.controls.join(", ") || "none"}]; fault ${p.fault_type || "none"} on ${p.fault_target_step || "-"}`;
+    case "tool_call": return `${p.step} attempt ${p.attempt}: ${p.method} ${p.service}${p.path}`;
+    case "observation": return `${p.step} attempt ${p.attempt}: ${p.timed_out ? "TIMEOUT" : "status " + p.status}${p.source !== "service" ? " (from " + p.source + ")" : ""}`;
+    case "decision": return `${p.step}: ${p.action} (${p.reason})`;
+    case "finished": return `agent believes: ${p.believed_outcome}${p.failed_step ? ", failed at " + p.failed_step : ""}`;
+    case "control_verify": return `${p.step}: queried actual state, committed=${p.committed}${p.record_id ? " (" + p.record_id + ")" : ""}`;
+    case "control_compensation": return `${p.step}: ${p.skipped ? "no compensation defined" : "status " + p.status + ", verified undone=" + p.verified_undone}`;
+    case "control_dedupe_hit": return `${p.step}: answered from client dedupe store`;
+    case "escalation": return `${p.message} leftover=${JSON.stringify(p.leftover)} verified=${p.verified}`;
+    case "fault_injected": return `${p.fault_type} on ${p.step} attempt ${p.attempt}`;
+    case "delivered": return `${p.purpose} ${p.method} ${p.service}${p.path} -> service answered ${p.status}${p.idempotent_replay ? " (idempotent replay)" : ""}`;
+    case "response_to_agent": return `${p.step}: agent is told ${p.timed_out ? "TIMEOUT" : p.status}`;
+    case "state_change": return p.change === "inserted"
+      ? `${p.service}.${p.table} ${p.id} inserted ${JSON.stringify(p.row)}`
+      : `${p.service}.${p.table} ${p.id} updated ${Object.entries(p.fields).map(([k, v]) => `${k}: ${v[0]} -> ${v[1]}`).join(", ")}`;
+    case "invariants_checked": return `passed=${p.passed} ${JSON.stringify(p.violation_counts)}`;
+    default: return JSON.stringify(p);
+  }
+}
+async function main() {
+  const id = location.pathname.split("/").pop();
+  const res = await fetch(`/api/runs/${id}`);
+  if (!res.ok) { document.body.insertAdjacentHTML("beforeend", `<div class="err">Could not load run <code>${esc(id)}</code>: HTTP ${res.status}. <a href="">Retry</a></div>`); return; }
+  const d = await res.json(), r = d.run, o = d.outcome;
+  document.title = `${r.run_id} ${r.scenario}`;
+  document.getElementById("title").innerHTML = `<span class="mono">${esc(r.run_id)}</span> ${esc(r.scenario)}`;
+  document.getElementById("meta").innerHTML =
+    `<span>seed <b class="mono">${r.seed}</b></span><span>mode <b>${esc(r.mode)}</b></span>` +
+    `<span>fault <b>${esc(r.fault_type || "none")}</b></span><span>controls <b>${esc(r.controls.join(", ") || "none")}</b></span>` +
+    `<span>execution state <b>${esc(d.states.join(" > "))}</b></span>` +
+    (o ? `<span>tool calls <b class="mono">${o.tool_calls}</b></span><span>duplicate requests <b class="mono">${o.duplicate_requests}</b></span><span>duplicate committed operations <b class="mono">${o.duplicate_committed_operations}</b></span>` : "");
+  if (o) {
+    const cls = o.classification || "indeterminate";
+    document.getElementById("outcome").innerHTML = `<div class="outcome ${cls}"><b>${esc(cls)}</b> &mdash; ${esc(o.explanation)}<div class="detail">Agent believed: ${esc(o.agent_believed_outcome)}. Order actually confirmed: ${o.goal_achieved === null ? "unknown" : o.goal_achieved}.</div></div>`;
+  }
+  const why = Object.fromEntries(d.mismatches.map(m => [m.seq, m.explanation]));
+  document.getElementById("rows").innerHTML = d.events.map(e => {
+    const cells = LANES.map(l => l === e.lane ? `<td class="lane"><div class="kind">${esc(e.kind)}</div><div class="detail">${esc(describe(e))}</div>${why[e.seq] ? `<div class="why">Mismatch: ${esc(why[e.seq])}</div>` : ""}</td>` : `<td class="lane"></td>`).join("");
+    return `<tr class="${why[e.seq] ? "mismatch" : ""}"><td class="t">${e.logical_ms}</td>${cells}</tr>`;
+  }).join("");
+  document.getElementById("invariants").innerHTML = d.invariants.map(i =>
+    `<tr><td class="mono">${esc(i.invariant)}</td><td>${i.passed ? "holds" : "VIOLATED"}</td><td class="detail mono">${esc(i.violations.map(v => `${v.entity_type} ${v.entity_id} ${JSON.stringify(v.detail)}`).join("; "))}</td></tr>`).join("");
+}
+main();
+</script>
+</body>
+</html>

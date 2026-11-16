@@ -28,6 +28,8 @@ jobs:
       - run: uv run mypy
       # Live-mode tests are deselected by default (pytest addopts: -m 'not live').
       - run: uv run pytest
+      - name: benchmark smoke run (2 seeds per cell)
+        run: make bench SEEDS=2
 
   compose:
     runs-on: ubuntu-latest
@@ -39,4 +41,5 @@ jobs:
           for port in 8101 8102 8103 8104; do
             curl --fail --silent "http://localhost:$port/health"
           done
+      - run: curl --fail --silent http://localhost:8100/api/runs
       - run: docker compose down

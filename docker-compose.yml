@@ -15,6 +15,16 @@ x-service: &service
     retries: 5
 
 services:
+  # Results API and run-detail timeline: http://localhost:8100
+  api:
+    <<: *service
+    command: ["uvicorn", "agentchaos.api:app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
+    ports: ["8100:8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(urllib.request.urlopen('http://localhost:8000/api/runs').status != 200)"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
   orders:
     <<: *service
     command: ["uvicorn", "agentchaos.services.asgi:orders", "--factory", "--host", "0.0.0.0", "--port", "8000"]

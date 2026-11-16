@@ -27,3 +27,19 @@ Choices made where the spec was ambiguous. Simplest option taken each time.
 | D19 | `FaultPolicy` and `SafetyControl` exist as protocols only; their shapes are provisional. | Their implementations are Day 2 and Day 3. |
 | D20 | No Postman collections, OpenAPI files or other API tooling added. | Scope is frozen. |
 | D21 | `.env` is created with the same blank keys as `.env.example`. | "Empty `.env` with exactly these keys." |
+
+## Day 2 and Day 3 (2026-11-17)
+
+| # | Decision | Why |
+|---|---|---|
+| D22 | The fault target step is chosen by the run's seeded RNG from the steps eligible for that fault; the order's SKU and quantity also come from the seed. | This is what varies across seeds in deterministic mode. |
+| D23 | `partial_commit` makes the target step's service unavailable for every attempt. | A one-off failure is fixed by a naive retry and demonstrates nothing. |
+| D24 | Deterministic mode uses a scripted naive-retry agent only. Replay of recorded decision traces is deferred to P1, where live runs produce traces. | The spec allows either; the scripted policy is enough for P0. |
+| D25 | Classification: violated + verified escalation = `manual_intervention_required`; violated otherwise = `undetected_violation`; clean, order confirmed, zero duplicate committed operations = `verified_recovery`; clean with a verified escalation = `manual_intervention_required`; clean otherwise = `partial_recovery`. | A stray duplicate that breaks no invariant (second order, second notification) must not be reported as a clean recovery. |
+| D26 | An escalation only counts if a control produced it after querying actual state. An agent that simply gives up has not escalated. | "Verified escalation decision." |
+| D27 | Duplicate requests and duplicate committed operations are both computed from the services' own request logs, grouped by request hash. A no-op (confirming a confirmed order) is logged as `noop`, not `committed`. | Keeps the two numbers separate and grounded in what reached the services. |
+| D28 | Benchmark has a sixth config, `idempotency_client_only` (keys sent, services ignore them). | Evidence for the server-cooperation requirement; it scores the same as no controls. |
+| D29 | Run latency in deterministic mode is logical milliseconds until the agent and controls finished (20 ms per call, 1000 ms per timeout). | The engine may not read wall-clock time. Real latency arrives with live mode. |
+| D30 | After the agent finishes, the engine advances logical time past the orphan grace period before checking invariants. | Makes "orphaned" decidable in every run. |
+| D31 | The minimal run-detail page is static HTML served by the results API; the React app replaces it in P1. | Day 2 asks for a plain timeline from real data, no polish. |
+| D32 | `Makefile` exports `PYTHONPATH=src`. | macOS marks the editable-install `.pth` hidden and Python 3.12 skips it. |

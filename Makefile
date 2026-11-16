@@ -1,4 +1,9 @@
-.PHONY: setup dev test lint bench secrets
+.PHONY: setup dev api test lint bench secrets
+
+# macOS can mark the editable-install .pth file hidden, which Python 3.12 then
+# skips; putting src on the path keeps `python -m agentchaos...` working anyway.
+export PYTHONPATH := src
+SEEDS ?= 20
 
 setup:
 	uv sync
@@ -18,6 +23,10 @@ test: lint
 secrets:
 	uv run pre-commit run gitleaks --all-files
 
+api:
+	uv run uvicorn agentchaos.api:app --factory --port 8100
+
+# Runs {3 faults} x {6 control configs} x {SEEDS seeds} in deterministic mode and
+# appends the runs to data/results/results.db. Same seeds give the same numbers.
 bench:
-	@echo "make bench: the benchmark runner is a Day 3 deliverable and does not exist yet." >&2
-	@exit 1
+	uv run python -m agentchaos.bench --seeds $(SEEDS)

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Runs</title>
+<style>
+  :root { --bg:#0E1013; --surface:#16191D; --border:#23272E; --text:#E6E8EB; --muted:#8B929C; --accent:#2BB3A3; }
+  body { margin:0; background:var(--bg); color:var(--text); font:13px/1.45 "IBM Plex Sans",Inter,system-ui,sans-serif; }
+  h1 { font-size:16px; margin:16px 24px; font-weight:600; }
+  a { color:var(--accent); }
+  .mono, td.n { font-family:"IBM Plex Mono","JetBrains Mono",ui-monospace,monospace; font-variant-numeric:tabular-nums; }
+  .wrap { margin:0 24px 24px; border:1px solid var(--border); border-radius:4px; }
+  table { width:100%; border-collapse:collapse; }
+  th { position:sticky; top:0; background:var(--surface); text-align:left; font-size:12px; padding:8px; border-bottom:1px solid var(--border); }
+  td { height:32px; padding:0 8px; border-bottom:1px solid var(--border); }
+  td.n, th.n { text-align:right; }
+  .empty { padding:16px; color:var(--muted); }
+</style>
+</head>
+<body>
+<h1>Stored runs</h1>
+<div class="wrap"><table>
+  <thead><tr><th>Run</th><th>Batch</th><th>Fault</th><th>Controls</th><th class="n">Seed</th><th>Final state</th><th>Classification</th><th class="n">Dup. requests</th><th class="n">Dup. committed ops</th></tr></thead>
+  <tbody id="rows"></tbody>
+</table><div id="empty"></div></div>
+<script>
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+fetch("/api/runs").then(r => r.json()).then(runs => {
+  if (!runs.length) { document.getElementById("empty").innerHTML = '<div class="empty">No runs yet. Run <code>make bench</code> to execute the benchmark matrix.</div>'; return; }
+  document.getElementById("rows").innerHTML = runs.map(r => `<tr>
+    <td class="mono"><a href="/runs/${esc(r.run_id)}">${esc(r.run_id)}</a></td><td class="mono">${esc(r.batch_id)}</td>
+    <td>${esc(r.fault_type || "none")}</td><td>${esc(r.controls.join(", ") || "none")}</td><td class="n">${r.seed}</td>
+    <td>${esc(r.final_state || "unfinished")}</td><td>${esc(r.classification || (r.final_state === "indeterminate" ? "indeterminate" : ""))}</td>
+    <td class="n">${r.duplicate_requests ?? ""}</td><td class="n">${r.duplicate_committed_operations ?? ""}</td></tr>`).join("");
+}).catch(e => { document.getElementById("empty").innerHTML = `<div class="empty">Could not load runs: ${esc(e.message)}. <a href="">Retry</a></div>`; });
+</script>
+</body>
+</html>
