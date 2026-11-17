@@ -12,6 +12,7 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
+import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -22,7 +23,15 @@ from agentchaos.config import get_settings, log_provider_statuses
 from agentchaos.controls import CONTROL_NAMES
 from agentchaos.engine import Engine, RunConfig
 from agentchaos.faults import ELIGIBLE_STEPS, FAULT_TYPES
-from agentchaos.metrics import benchmark_matrix, controls_delta, controls_label
+from agentchaos.invariants.order import order_invariants
+from agentchaos.llm_pool import ProviderPool
+from agentchaos.metrics import (
+    benchmark_matrix,
+    controls_delta,
+    controls_label,
+    invariant_breakdown,
+    live_model_stats,
+)
 from agentchaos.results.store import ResultsStore
 from agentchaos.services.cluster import ServiceCluster
 
@@ -79,7 +88,10 @@ def mismatches(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def create_app(
-    store: ResultsStore, engine: Engine | None = None, web_dist: Path | None = None
+    store: ResultsStore,
+    engine: Engine | None = None,
+    web_dist: Path | None = None,
+    pool: ProviderPool | None = None,
 ) -> FastAPI:
     api = FastAPI(title="agentchaos")
     lock = asyncio.Lock()
@@ -163,10 +175,7 @@ def create_app(
 
     @api.get("/api/benchmark")
     async def benchmark(batch_id: str | None = None) -> dict[str, Any]:
-        batch = batch_id or next(
-            (b["batch_id"] for b in store.list_batches() if b["batch_id"].startswith("batch_")),
-            None,
-        )
+        batch = batch_id or latest_matrix_batch()
         if batch is None:
             return {"batch_id": None, "cells": [], "deltas": []}
         cells = benchmark_matrix(store, batch)
@@ -184,6 +193,54 @@ def create_app(
         async with lock:
             batch_id = await run_matrix(runner, body.seeds, body.start_seed)
         return {"batch_id": batch_id}
+
+    def latest_matrix_batch() -> str | None:
+        return next(
+            (b["batch_id"] for b in store.list_batches() if b["batch_id"].startswith("batch_")),
+            None,
+        )
+
+    @api.get("/api/invariants")
+    async def invariants(batch_id: str | None = None) -> dict[str, Any]:
+        descriptions = {inv.name: inv.description for inv in order_invariants()}
+        batch = batch_id or latest_matrix_batch()
+        if batch is None:
+            return {"batch_id": None, "invariants": []}
+        return {
+            "batch_id": batch,
+            "invariants": invariant_breakdown(store, batch, descriptions),
+        }
+
+    @api.get("/api/providers")
+    async def providers() -> dict[str, Any]:
+        """Provider state. Keys are only ever present masked."""
+        return {
+            "providers": pool.status() if pool else [],
+            "failovers": pool.failover_log() if pool else [],
+            "live_models": live_model_stats(store),
+        }
+
+    @api.post("/api/providers/check")
+    async def check_providers() -> dict[str, Any]:
+        if pool is None:
+            raise HTTPException(503, "no provider pool configured")
+        async with lock:
+            await pool.health_check()
+        return {"providers": pool.status()}
+
+    @api.get("/api/settings")
+    async def settings_view() -> dict[str, Any]:
+        """Non-secret settings only."""
+        current = get_settings()
+        return {
+            "env": current.env,
+            "default_seed": current.default_seed,
+            "live_mode_enabled": current.live_mode_enabled,
+            "data_dir": str(current.data_dir),
+            "results_db": str(store.db_path),
+            "otel_endpoint": current.otel_exporter_otlp_endpoint,
+            "runs_stored": store.count_runs(),
+        }
 
     dist = web_dist if web_dist is not None else WEB_DIST
     if (dist / "index.html").exists():
@@ -216,4 +273,6 @@ def app() -> FastAPI:
     # the standalone service processes.
     cluster = ServiceCluster(settings.data_dir / "api-services", seed=settings.default_seed)
     engine = Engine(cluster, store, settings.data_dir / "api-control")
-    return create_app(store, engine, settings.web_dist)
+    # Built without network calls; health checks run only when asked for.
+    pool = ProviderPool.from_settings(settings, httpx.AsyncClient())
+    return create_app(store, engine, settings.web_dist, pool)

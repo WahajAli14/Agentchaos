@@ -217,3 +217,70 @@ def test_variance_is_population_variance() -> None:
     assert mean([0, 0, 2, 2]) == 1.0
     assert variance([0, 0, 2, 2]) == 1.0
     assert variance([3, 3, 3]) == 0.0
+
+
+async def test_invariants_providers_and_settings_endpoints(engine: Engine) -> None:
+    from agentchaos.live import run_live
+    from agentchaos.llm_pool import ProviderPool
+    from tests.test_live import NaiveModel
+    from tests.test_llm_pool import FakeProvider
+
+    await run_matrix_once(engine)
+    model = NaiveModel()
+    for controls in ((), ("verify_after_write",)):
+        await run_live(
+            engine,
+            model.__class__(),
+            RunConfig(
+                "live",
+                seed=42,
+                fault_type="timeout_after_commit",
+                target_step="create_invoice",
+                controls=controls,
+                mode="live",
+            ),
+        )
+    down = FakeProvider("groq", 1)
+    down.failing = True
+    pool = ProviderPool.from_providers(
+        [down, FakeProvider("mistral", 2)], disabled={"gemini": "disabled: no key"}
+    )
+    app = create_app(engine.store, engine, web_dist=Path("/nonexistent"), pool=pool)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://api"
+    ) as client:
+        inv = (await client.get("/api/invariants")).json()
+        by_name = {i["invariant"]: i for i in inv["invariants"]}
+        assert len(by_name) == 5 and inv["batch_id"].startswith("batch_")
+        single = by_name["single_invoice_per_confirmed_order"]
+        assert single["description"] and single["runs_checked"] == 18
+        assert single["violations"] == sum(c["violations"] for c in single["by_cell"])
+        assert all(e["run_id"].startswith("run_") for e in single["examples"])
+
+        checked = (await client.post("/api/providers/check")).json()["providers"]
+        assert {p["name"]: p["healthy"] for p in checked} == {
+            "groq": False,
+            "mistral": True,
+            "gemini": False,
+        }
+        info = (await client.get("/api/providers")).json()
+        groq = next(p for p in info["providers"] if p["name"] == "groq")
+        assert "health check failed" in groq["reason"]
+        models = info["live_models"]
+        assert len(models) == 1 and models[0]["model"] == "naive-v1"
+        assert models[0]["runs"] == 2 and models[0]["verified_runs"] == 1
+        assert models[0]["note"] == "smoke test, n=2, not statistically meaningful"
+        assert models[0]["billed_cost_usd"] == 0.0 and models[0]["estimated_cost_usd"] > 0
+        assert models[0]["tokens_per_verified_run"] == pytest.approx(
+            models[0]["prompt_tokens"] + models[0]["completion_tokens"]
+        )
+
+        settings = (await client.get("/api/settings")).json()
+        assert settings["runs_stored"] == engine.store.count_runs()
+        assert not any("key" in name.lower() for name in settings)
+
+
+async def run_matrix_once(engine: Engine) -> str:
+    from agentchaos.bench import run_matrix
+
+    return await run_matrix(engine, 1, 42)

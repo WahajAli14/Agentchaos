@@ -23,7 +23,8 @@ from agentchaos.engine import Engine, RunConfig, RunSummary
 from agentchaos.faults import FAULT_TYPES
 from agentchaos.interfaces import CallNext, WorkflowSpec
 from agentchaos.live_agent import LiveAgent, ReplayAgent
-from agentchaos.llm import LLMProvider, select_provider
+from agentchaos.llm import LLMProvider
+from agentchaos.llm_pool import ProviderPool
 from agentchaos.metrics import controls_label
 from agentchaos.proxy import Recorder
 from agentchaos.results.store import ResultsStore
@@ -93,10 +94,14 @@ async def smoke(settings: Settings, runs: int) -> int:
         return 2
     data_dir = settings.data_dir
     async with httpx.AsyncClient() as http:
-        provider = await select_provider(settings, http)
-        if provider is None:
+        pool = ProviderPool.from_settings(settings, http)
+        await pool.health_check()
+        for row in pool.status():
+            state = "healthy" if row["healthy"] else row["reason"]
+            print(f"  provider {row['name']}: {state}")
+        if pool.select() is None:
             print(
-                "No LLM provider available. Put one provider key in .env "
+                "No healthy LLM provider. Put one provider key in .env "
                 "(GROQ_API_KEY is the default) or start Ollama.",
                 file=sys.stderr,
             )
@@ -105,12 +110,18 @@ async def smoke(settings: Settings, runs: int) -> int:
         cluster = ServiceCluster(settings.services_dir, seed=settings.default_seed)
         engine = Engine(cluster, store, data_dir / "control")
         batch_id = f"live_{store.count_runs() + 1:06d}"
-        tally: dict[tuple[str, str], Counter[str]] = {}
+        tally: dict[tuple[str, str, str], Counter[str]] = {}
         try:
             for fault_type in FAULT_TYPES:
                 for controls in SMOKE_CONTROLS:
                     label = controls_label(controls)
                     for k in range(runs):
+                        # One provider per run; a failed provider is skipped next time.
+                        provider = pool.select()
+                        if provider is None:
+                            print("  no healthy provider left; stopping", file=sys.stderr)
+                            break
+                        model = f"{provider.name}/{provider.model}"
                         summary = await run_live(
                             engine,
                             provider,
@@ -129,17 +140,20 @@ async def smoke(settings: Settings, runs: int) -> int:
                             if summary.classification
                             else summary.state.value
                         )
-                        tally.setdefault((fault_type, label), Counter())[outcome] += 1
-                        print(f"  {summary.run_id} {fault_type} [{label}] -> {outcome}")
+                        tally.setdefault((model, fault_type, label), Counter())[outcome] += 1
+                        print(f"  {summary.run_id} {model} {fault_type} [{label}] -> {outcome}")
         finally:
             engine.close()
             cluster.close()
             store.close()
-    print(f"\nbatch {batch_id}, model {provider.name}/{provider.model}")
-    print(f"smoke test, n={runs} per scenario, not statistically meaningful\n")
-    for (fault_type, label), counts in tally.items():
-        detail = ", ".join(f"{name} {n}" for name, n in sorted(counts.items()))
-        print(f"  {fault_type:<22}{label:<40}{detail}")
+    print(f"\nbatch {batch_id}; results are per model and never combined across models")
+    for (model, fault_type, label), counts in tally.items():
+        n = sum(counts.values())
+        detail = ", ".join(f"{name} {count}" for name, count in sorted(counts.items()))
+        print(f"  {model}  {fault_type:<22}{label:<40}{detail}")
+        print(f"    smoke test, n={n}, not statistically meaningful")
+    for event in pool.failover_log():
+        print(f"  failover: skipped {event['skipped']} ({event['reason']}) -> {event['chosen']}")
     return 0
 
 

@@ -151,3 +151,101 @@ def format_matrix(cells: Sequence[Cell]) -> str:
             f"{d['latency_p50_ms'] or 0:>7.0f}"
         )
     return "\n".join(lines)
+
+
+def live_model_stats(store: ResultsStore) -> list[dict[str, Any]]:
+    """Live-run totals per model. Models are never combined into one statistic."""
+    groups: dict[tuple[str, str], dict[str, Any]] = {}
+    for run in store.list_runs():
+        if run["mode"] != "live" or run["final_state"] is None:
+            continue
+        key = (run["provider"] or "unknown", run["model"] or "unknown")
+        group = groups.setdefault(
+            key,
+            {
+                "provider": key[0],
+                "model": key[1],
+                "runs": 0,
+                "outcomes": Counter(),
+                "llm_calls": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "billed_cost_usd": 0.0,
+                "estimated_cost_usd": 0.0,
+                "latencies": [],
+            },
+        )
+        group["runs"] += 1
+        group["outcomes"][run["classification"] or INDETERMINATE] += 1
+        for name in ("llm_calls", "prompt_tokens", "completion_tokens", "billed_cost_usd"):
+            group[name] += run[name]
+        # One unknown estimate makes the total unknown; it is never guessed.
+        if run["estimated_cost_usd"] is None or group["estimated_cost_usd"] is None:
+            group["estimated_cost_usd"] = None
+        else:
+            group["estimated_cost_usd"] += run["estimated_cost_usd"]
+        if run["latency_ms"] is not None:
+            group["latencies"].append(run["latency_ms"])
+    out = []
+    for group in groups.values():
+        verified = group["outcomes"][Classification.VERIFIED_RECOVERY.value]
+        latencies = group.pop("latencies")
+        out.append(
+            {
+                **group,
+                "outcomes": {name: group["outcomes"][name] for name in OUTCOME_COLUMNS},
+                "verified_runs": verified,
+                "tokens_per_verified_run": (group["prompt_tokens"] + group["completion_tokens"])
+                / verified
+                if verified
+                else None,
+                "llm_calls_per_verified_run": group["llm_calls"] / verified if verified else None,
+                "latency_p50_ms": percentile(latencies, 50),
+                "latency_p95_ms": percentile(latencies, 95),
+                "note": f"smoke test, n={group['runs']}, not statistically meaningful"
+                if group["runs"] < 20
+                else f"n={group['runs']}",
+            }
+        )
+    return sorted(out, key=lambda g: (g["provider"], g["model"]))
+
+
+def invariant_breakdown(
+    store: ResultsStore, batch_id: str, descriptions: dict[str, str]
+) -> list[dict[str, Any]]:
+    """Per invariant: where it was violated in a batch, with example records."""
+    runs = {run["run_id"]: run for run in store.list_runs(batch_id)}
+    out: dict[str, dict[str, Any]] = {
+        name: {
+            "invariant": name,
+            "description": description,
+            "runs_checked": 0,
+            "runs_violated": 0,
+            "violations": 0,
+            "by_cell": {},
+            "examples": [],
+        }
+        for name, description in descriptions.items()
+    }
+    for result in store.all_invariant_results(batch_id):
+        entry = out.get(result["invariant"])
+        run = runs.get(result["run_id"])
+        if entry is None or run is None:
+            continue
+        entry["runs_checked"] += 1
+        if result["passed"]:
+            continue
+        entry["runs_violated"] += 1
+        entry["violations"] += len(result["violations"])
+        key = (run["fault_type"] or "no_fault", controls_label(run["controls"]))
+        cell = entry["by_cell"].setdefault(
+            key,
+            {"fault_type": key[0], "controls": key[1], "runs_violated": 0, "violations": 0},
+        )
+        cell["runs_violated"] += 1
+        cell["violations"] += len(result["violations"])
+        if len(entry["examples"]) < 10:
+            entry["examples"].extend(
+                {"run_id": result["run_id"], **violation} for violation in result["violations"][:1]
+            )
+    return [{**entry, "by_cell": list(entry["by_cell"].values())} for entry in out.values()]

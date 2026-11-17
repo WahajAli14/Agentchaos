@@ -144,8 +144,9 @@ ALLOWED = {
     ("results/store.py", "func", "current_timestamp"),
     ("live_agent.py", "time", "perf_counter"),
     ("llm.py", "asyncio", "sleep"),
+    ("llm_pool.py", "time", "monotonic"),
 }
-ALLOWED_IMPORTS = {("live_agent.py", "time")}
+ALLOWED_IMPORTS = {("live_agent.py", "time"), ("llm_pool.py", "time")}
 
 
 def test_source_has_no_wall_clock_or_unseeded_randomness() -> None:
