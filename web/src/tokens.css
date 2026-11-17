@@ -1,0 +1,37 @@
+/* Every design token lives in this file. Components use the Tailwind names
+   mapped to these variables in tailwind.config.ts; no raw hex elsewhere. */
+:root,
+[data-theme="dark"] {
+  --bg: #0e1013;
+  --surface: #16191d;
+  --raised: #1c2026;
+  --border: #23272e;
+  --border-strong: #353b45;
+  --text: #e6e8eb;
+  --muted: #9aa1ab;
+  --accent: #2bb3a3;
+  --accent-text: #06211e;
+  --verified: #4caf7a;
+  --partial: #d9a441;
+  --manual: #e0823d;
+  --violation: #f0675f;
+  --indeterminate: #9aa1ab;
+  --mismatch-bg: #2a1d12;
+}
+[data-theme="light"] {
+  --bg: #f6f7f8;
+  --surface: #ffffff;
+  --raised: #eef0f2;
+  --border: #d8dce1;
+  --border-strong: #b6bcc5;
+  --text: #15181c;
+  --muted: #56606b;
+  --accent: #0f766e;
+  --accent-text: #ffffff;
+  --verified: #1b7445;
+  --partial: #7d5200;
+  --manual: #a84a0b;
+  --violation: #b93026;
+  --indeterminate: #56606b;
+  --mismatch-bg: #fbeee2;
+}
