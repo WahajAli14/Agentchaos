@@ -145,6 +145,7 @@ ALLOWED = {
     ("live_agent.py", "time", "perf_counter"),
     ("llm.py", "asyncio", "sleep"),
     ("llm_pool.py", "time", "monotonic"),
+    ("llm_pool.py", "asyncio", "sleep"),
 }
 ALLOWED_IMPORTS = {("live_agent.py", "time"), ("llm_pool.py", "time")}
 

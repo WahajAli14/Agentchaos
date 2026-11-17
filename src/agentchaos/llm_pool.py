@@ -8,10 +8,11 @@ breaker records the failure and the next selection fails over to the next
 provider.
 """
 
+import asyncio
 import logging
 import time
 from collections import deque
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -67,6 +68,15 @@ class RateLimiter:
         current = self._now()
         self._minute.append(current)
         self._day.append(current)
+
+    def wait_s(self) -> float | None:
+        """Seconds until a request is allowed: 0 if now, None if the daily budget is spent."""
+        self._trim()
+        if self.rpd is not None and len(self._day) >= self.rpd:
+            return None
+        if self.rpm is not None and len(self._minute) >= self.rpm:
+            return max(0.0, 60 - (self._now() - self._minute[0]))
+        return 0.0
 
     def usage(self) -> dict[str, int | None]:
         self._trim()
@@ -133,8 +143,11 @@ class FailoverEvent:
 class RoutedProvider:
     """A pool member pinned for one run. Reports each call back to the pool."""
 
-    def __init__(self, member: Member) -> None:
+    def __init__(
+        self, member: Member, sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
+    ) -> None:
         self._member = member
+        self._sleep = sleep
         self.name = member.provider.name
         self.model = member.provider.model
         self.config: ProviderConfig = member.provider.config
@@ -143,9 +156,13 @@ class RoutedProvider:
         self, messages: Sequence[dict[str, Any]], tools: Sequence[dict[str, Any]]
     ) -> LLMResponse:
         member = self._member
-        if not member.limiter.allow():
-            member.failures += 1
-            raise LLMError(f"{self.name}/{self.model}: client-side rate limit reached")
+        # Per-minute limit: wait for a slot, so a run is slowed, not cut short.
+        # Daily budget spent: fail; the pool skips this provider for later runs.
+        while (wait := member.limiter.wait_s()) != 0.0:
+            if wait is None:
+                member.failures += 1
+                raise LLMError(f"{self.name}/{self.model}: client-side daily request limit reached")
+            await self._sleep(wait)
         member.limiter.record()
         member.calls += 1
         try:
@@ -162,6 +179,7 @@ class RoutedProvider:
 class ProviderPool:
     members: list[Member]
     now: Now = time.monotonic
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
     disabled: dict[str, str] = field(default_factory=dict)
     # Config of providers that are listed but not enabled, for display.
     disabled_configs: dict[str, ProviderConfig] = field(default_factory=dict)
@@ -185,7 +203,7 @@ class ProviderPool:
             )
             for provider in ordered
         ]
-        return cls(members, now, dict(disabled or {}))
+        return cls(members, now=now, disabled=dict(disabled or {}))
 
     @classmethod
     def from_settings(
@@ -270,7 +288,7 @@ class ProviderPool:
             self.failovers.append(
                 FailoverEvent(self.now(), name, reason, chosen.provider.name if chosen else None)
             )
-        return RoutedProvider(chosen) if chosen else None
+        return RoutedProvider(chosen, self.sleep) if chosen else None
 
     def status(self) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = [

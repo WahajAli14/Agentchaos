@@ -139,17 +139,27 @@ async def test_a_run_keeps_one_provider_so_models_are_never_mixed() -> None:
     assert mistral.calls == 0  # no silent mid-run switch to another model
 
 
-async def test_rate_limited_provider_is_skipped_and_enforced_mid_run() -> None:
+async def test_rate_limit_waits_mid_run_and_is_skipped_between_runs() -> None:
     clock = Clock()
-    groq, mistral = FakeProvider("groq", 1, rpm=2), FakeProvider("mistral", 2)
+    groq, mistral = FakeProvider("groq", 1, rpm=2, rpd=4), FakeProvider("mistral", 2)
     pool = pool_of(groq, mistral, clock=clock)
+    slept: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        slept.append(seconds)
+        clock.t += seconds
+
+    pool.sleep = sleep
     routed = pool.select()
     assert routed is not None and routed.name == "groq"
+    clock.t = 10
     await routed.chat([], [])
+    clock.t = 20
     await routed.chat([], [])
-    with pytest.raises(LLMError, match="client-side rate limit"):
-        await routed.chat([], [])
-    assert groq.calls == 2  # the third call never left the client
+    # Minute budget full: the third call waits until the t=10 slot expires (t=70).
+    await routed.chat([], [])
+    assert slept == [50.0] and groq.calls == 3
+    # Between runs, a provider at its minute limit is skipped, not waited on.
     after = pool.select()
     assert after is not None and after.name == "mistral"
     assert pool.failover_log()[-1] == {
@@ -157,9 +167,14 @@ async def test_rate_limited_provider_is_skipped_and_enforced_mid_run() -> None:
         "reason": "rate limited",
         "chosen": "mistral",
     }
-    clock.t = 61
+    clock.t += 61
     back = pool.select()
     assert back is not None and back.name == "groq"
+    await back.chat([], [])
+    # Daily budget spent: fail instead of waiting a day.
+    with pytest.raises(LLMError, match="daily request limit"):
+        await back.chat([], [])
+    assert groq.calls == 4
 
 
 async def test_health_check_disables_failing_and_toolless_providers_with_reasons() -> None:
