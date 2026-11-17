@@ -93,7 +93,7 @@ async def test_retries_with_exponential_backoff_then_succeeds() -> None:
     async with httpx.AsyncClient() as client:
         reply = await provider(client, sleeps).chat([], [])
     assert reply.content == "done" and reply.tool_calls == ()
-    assert sleeps == [1.0, 2.0]
+    assert sleeps == [2.0, 4.0]
 
 
 @respx.mock
@@ -104,8 +104,8 @@ async def test_gives_up_after_bounded_attempts_without_leaking_the_key() -> None
         llm = provider(client, sleeps)
         with pytest.raises(LLMError) as error:
             await llm.chat([], [])
-    assert route.call_count == 4 and sleeps == [1.0, 2.0, 4.0]
-    assert "HTTP 503 after 4 attempts" in str(error.value)
+    assert route.call_count == 6 and sleeps == [2.0, 4.0, 8.0, 16.0, 32.0]
+    assert "HTTP 503 after 6 attempts" in str(error.value)
     assert FAKE_KEY not in str(error.value) and FAKE_KEY not in repr(llm.__dict__)
 
 
@@ -374,3 +374,56 @@ async def test_save_trace_writes_one_file_per_run(engine: Engine, tmp_path: Path
     path = save_trace(tmp_path, summary, config, model)
     assert path.name == f"{summary.run_id}.json"
     assert json.loads(path.read_text())["seed"] == 3
+
+
+@respx.mock
+async def test_429_waits_as_long_as_the_provider_says_capped() -> None:
+    respx.post(URL).mock(
+        side_effect=[
+            httpx.Response(429, headers={"retry-after": "12"}),
+            httpx.Response(429, headers={"x-ratelimit-reset-tokens": "7.66s"}),
+            httpx.Response(429, headers={"retry-after": "600"}),
+            httpx.Response(429, headers={"x-ratelimit-reset-requests": "1m26.4s"}),
+            httpx.Response(200, json=completion(content="done")),
+        ]
+    )
+    sleeps: list[float] = []
+    async with httpx.AsyncClient() as client:
+        await provider(client, sleeps).chat([], [])
+    # max(own backoff, provider hint), never more than 60 s per wait
+    assert sleeps == [12.0, 7.66, 60.0, 60.0]
+
+
+def test_retry_after_parsing() -> None:
+    from agentchaos.llm import retry_after_s
+
+    assert retry_after_s({"retry-after": "3"}) == 3.0
+    assert retry_after_s({"x-ratelimit-reset-tokens": "250ms"}) == 0.25
+    assert (
+        retry_after_s({"x-ratelimit-reset-requests": "2s", "x-ratelimit-reset-tokens": "1m"})
+        == 60.0
+    )
+    assert retry_after_s({"retry-after": "Wed, 21 Oct 2026 07:28:00 GMT"}) is None
+    assert retry_after_s({}) is None
+
+
+async def test_provider_error_is_recorded_and_kept_out_of_model_stats(engine: Engine) -> None:
+    from agentchaos.metrics import live_model_stats
+
+    class Throttled(NaiveModel):
+        async def chat(
+            self, messages: Sequence[dict[str, Any]], tools: Sequence[dict[str, Any]]
+        ) -> LLMResponse:
+            if self.calls >= 2:
+                raise LLMError("fake/naive-v1: HTTP 429 after 6 attempts")
+            return await super().chat(messages, tools)
+
+    aborted = await run_live(engine, Throttled(), RunConfig("live", seed=1, mode="live"))
+    outcome = engine.store.outcome(aborted.run_id)
+    assert outcome is not None and outcome["agent_believed_outcome"] == "provider_error"
+    await run_live(engine, NaiveModel(), RunConfig("live", seed=2, mode="live"))
+    [stats] = live_model_stats(engine.store)
+    assert stats["runs"] == 1 and stats["provider_aborted_runs"] == 1
+    assert stats["note"] == (
+        "smoke test, n=1, not statistically meaningful; 1 more cut short by the provider, excluded"
+    )

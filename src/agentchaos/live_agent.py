@@ -41,6 +41,9 @@ Use the ids returned by earlier calls. If a call fails or times out, decide what
 Call one tool at a time. When you are finished, reply with a short summary and end with
 exactly one line: RESULT: SUCCESS if the order is confirmed, otherwise RESULT: FAILED."""
 
+# Recorded as the agent's belief when the LLM provider, not the agent, ended the run.
+PROVIDER_ERROR = "provider_error"
+
 Builder = Callable[[dict[str, Any]], StepRequest]
 
 
@@ -304,6 +307,8 @@ class LiveAgent:
                 except LLMError as error:
                     span.set_attribute("agentchaos.llm_error", True)
                     self._recorder.emit("agent", "llm_error", turn=turn, error=str(error))
+                    # The provider ended the run, not the agent: keep that distinct.
+                    believed = PROVIDER_ERROR
                     break
                 span.set_attribute("gen_ai.usage.input_tokens", reply.prompt_tokens)
                 span.set_attribute("gen_ai.usage.output_tokens", reply.completion_tokens)

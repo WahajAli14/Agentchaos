@@ -359,6 +359,11 @@ class ResultsStore:
         with self.engine.connect() as conn:
             return [dict(row._mapping) for row in conn.execute(query)]
 
+    def run_ids_with_event(self, kind: str) -> set[str]:
+        query = select(run_events.c.run_id).where(run_events.c.kind == kind).distinct()
+        with self.engine.connect() as conn:
+            return {row[0] for row in conn.execute(query)}
+
     def latest_batch_id(self) -> str | None:
         query = (
             select(runs.c.batch_id)

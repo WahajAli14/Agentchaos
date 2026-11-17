@@ -22,7 +22,7 @@ from agentchaos.config import Settings, get_settings
 from agentchaos.engine import Engine, RunConfig, RunSummary
 from agentchaos.faults import FAULT_TYPES
 from agentchaos.interfaces import CallNext, WorkflowSpec
-from agentchaos.live_agent import LiveAgent, ReplayAgent
+from agentchaos.live_agent import PROVIDER_ERROR, LiveAgent, ReplayAgent
 from agentchaos.llm import LLMProvider
 from agentchaos.llm_pool import ProviderPool
 from agentchaos.metrics import controls_label
@@ -140,6 +140,10 @@ async def smoke(settings: Settings, runs: int) -> int:
                             if summary.classification
                             else summary.state.value
                         )
+                        if summary.trace and summary.trace[-1].get("believed_outcome") == (
+                            PROVIDER_ERROR
+                        ):
+                            outcome = f"provider_aborted ({outcome} in the databases)"
                         tally.setdefault((model, fault_type, label), Counter())[outcome] += 1
                         print(f"  {summary.run_id} {model} {fault_type} [{label}] -> {outcome}")
         finally:

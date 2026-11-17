@@ -9,7 +9,8 @@ Authorization header: never logged, stored or put in an exception message.
 import asyncio
 import json
 import logging
-from collections.abc import Awaitable, Callable, Sequence
+import re
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -119,8 +120,9 @@ class OpenAICompatibleProvider:
         api_key: SecretStr | None,
         client: httpx.AsyncClient,
         *,
-        max_attempts: int = 4,
-        backoff_s: float = 1.0,
+        max_attempts: int = 6,
+        backoff_s: float = 2.0,
+        max_wait_s: float = 60.0,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self.config = config
@@ -131,6 +133,7 @@ class OpenAICompatibleProvider:
         self._client = client
         self._max_attempts = max_attempts
         self._backoff_s = backoff_s
+        self._max_wait_s = max_wait_s
         self._sleep = sleep
 
     def _headers(self) -> dict[str, str]:
@@ -150,6 +153,7 @@ class OpenAICompatibleProvider:
             payload["tools"] = list(tools)
             payload["tool_choice"] = "auto"
         last = "no attempt made"
+        retry_after: float | None = None
         for attempt in range(1, self._max_attempts + 1):
             try:
                 response = await self._client.post(
@@ -164,11 +168,15 @@ class OpenAICompatibleProvider:
                 if response.status_code == 200:
                     return self._parse(response.json())
                 last = f"HTTP {response.status_code}"
+                retry_after = retry_after_s(response.headers)
                 if response.status_code not in RETRYABLE:
                     detail = response.text[:300]
                     raise LLMError(f"{self.name}/{self.model}: {last}: {detail}")
             if attempt < self._max_attempts:
-                await self._sleep(self._backoff_s * 2 ** (attempt - 1))
+                # The provider knows when its limit resets; trust it over our guess.
+                backoff = self._backoff_s * 2 ** (attempt - 1)
+                await self._sleep(min(self._max_wait_s, max(backoff, retry_after or 0.0)))
+                retry_after = None
         raise LLMError(f"{self.name}/{self.model}: {last} after {self._max_attempts} attempts")
 
     @staticmethod
@@ -194,6 +202,36 @@ class OpenAICompatibleProvider:
                 **({"tool_calls": message["tool_calls"]} if message.get("tool_calls") else {}),
             },
         )
+
+
+_DURATION = re.compile(r"(?:(\d+(?:\.\d+)?)m)?(?:(\d+(?:\.\d+)?)s)?(?:(\d+(?:\.\d+)?)ms)?$")
+
+
+def _duration_s(value: str) -> float | None:
+    """Parse '12', '7.66s', '1m26.4s' or '250ms' into seconds."""
+    value = value.strip()
+    try:
+        return float(value)
+    except ValueError:
+        pass
+    match = _DURATION.fullmatch(value)
+    if not match or not any(match.groups()):
+        return None
+    minutes, seconds, millis = (float(g) if g else 0.0 for g in match.groups())
+    return minutes * 60 + seconds + millis / 1000
+
+
+def retry_after_s(headers: Mapping[str, str]) -> float | None:
+    """How long the provider says to wait: Retry-After, else the longest rate-limit reset."""
+    if "retry-after" in headers:
+        return _duration_s(headers["retry-after"])
+    resets = [
+        _duration_s(headers[name])
+        for name in ("x-ratelimit-reset-requests", "x-ratelimit-reset-tokens")
+        if name in headers
+    ]
+    known = [r for r in resets if r is not None]
+    return max(known) if known else None
 
 
 def estimated_cost_usd(

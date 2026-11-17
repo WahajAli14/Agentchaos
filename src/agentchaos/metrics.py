@@ -156,6 +156,9 @@ def format_matrix(cells: Sequence[Cell]) -> str:
 def live_model_stats(store: ResultsStore) -> list[dict[str, Any]]:
     """Live-run totals per model. Models are never combined into one statistic."""
     groups: dict[tuple[str, str], dict[str, Any]] = {}
+    # Runs the LLM provider cut short (e.g. HTTP 429) say nothing about the agent.
+    # They are counted, but kept out of the outcome counts and per-run averages.
+    aborted = store.run_ids_with_event("llm_error")
     for run in store.list_runs():
         if run["mode"] != "live" or run["final_state"] is None:
             continue
@@ -173,8 +176,12 @@ def live_model_stats(store: ResultsStore) -> list[dict[str, Any]]:
                 "billed_cost_usd": 0.0,
                 "estimated_cost_usd": 0.0,
                 "latencies": [],
+                "provider_aborted_runs": 0,
             },
         )
+        if run["run_id"] in aborted:
+            group["provider_aborted_runs"] += 1
+            continue
         group["runs"] += 1
         group["outcomes"][run["classification"] or INDETERMINATE] += 1
         for name in ("llm_calls", "prompt_tokens", "completion_tokens", "billed_cost_usd"):
@@ -203,6 +210,11 @@ def live_model_stats(store: ResultsStore) -> list[dict[str, Any]]:
                 "latency_p50_ms": percentile(latencies, 50),
                 "latency_p95_ms": percentile(latencies, 95),
                 "note": f"smoke test, n={group['runs']}, not statistically meaningful"
+                + (
+                    f"; {group['provider_aborted_runs']} more cut short by the provider, excluded"
+                    if group["provider_aborted_runs"]
+                    else ""
+                )
                 if group["runs"] < 20
                 else f"n={group['runs']}",
             }
