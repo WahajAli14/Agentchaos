@@ -145,8 +145,16 @@ Controls off against all three on:
 ## Live LLM agent
 
 Live mode runs a real tool-calling model against the same proxy and controls.
-One OpenAI-compatible client covers every provider; the first provider with a
-key in `.env` is used (Groq by default), with a local Ollama as fallback.
+One OpenAI-compatible client covers Groq, Mistral, OpenRouter, Gemini and a
+local Ollama. Model ids, limits and list prices live in
+`src/agentchaos/providers.yaml`, not in code.
+
+A provider pool routes each run to the highest-priority provider that is
+healthy, under its client-side rate limit and has a closed circuit breaker. A
+startup probe makes one small tool call per provider and disables any that
+fail, with the reason. One provider is kept for a whole run, so a run's
+numbers always belong to a single model; a failing provider is skipped at the
+next run. API keys are only ever shown masked.
 
 ```
 AGENTCHAOS_LIVE_MODE_ENABLED=true   # in .env, plus one provider key
@@ -157,7 +165,8 @@ make live RUNS=3
 none has been configured in this checkout. The live agent, provider client and
 trace replay are tested against a scripted stand-in model only. When live runs
 exist they will be reported per model as "smoke test, n=K, not statistically
-meaningful".
+meaningful". The model ids in `providers.yaml` have not been exercised against
+the real providers; the health check will report any that are wrong.
 
 Every live run saves its tool-call trace to `data/traces/`. A trace can be
 replayed without an LLM, with different controls:
@@ -170,11 +179,26 @@ Cost is two fields: `billed_cost_usd` (what was charged; 0 on a free tier) and
 `estimated_cost_usd` (tokens at the public list price, or unknown if no price
 is configured in `providers.yaml`).
 
+## Screens
+
+Scenarios, Runs (with the three-lane timeline), Benchmark, Invariants,
+Providers and Settings. Dark and light themes; screenshots of each are in
+`docs/screenshots/`. Keyboard: `j`/`k` move, `Enter` opens, `r` runs the
+selected scenario, `/` focuses the filter, `?` lists shortcuts.
+
+## Tracing
+
+With `docker compose up`, every run is exported as one OpenTelemetry trace to
+Jaeger at http://localhost:16686 (service `agentchaos`): a root span per run
+and a child span per proxied call and per LLM call. Spans carry step names,
+status codes and token counts. They do not carry headers, message contents or
+keys. Tracing turns itself off if no collector is reachable.
+
 ## Run it
 
 ```
 cp .env.example .env
-docker compose up --build     # UI and API on http://localhost:8100
+docker compose up --build     # UI and API on http://localhost:8100, Jaeger on :16686
 make setup                    # uv sync, npm ci, gitleaks pre-commit hook
 make bench                    # the 360-run matrix above
 make test                     # ruff, mypy, pytest, eslint, design lint, tsc, vitest
@@ -198,8 +222,11 @@ Needs Python 3.12, [uv](https://docs.astral.sh/uv/), Node 22 and Docker.
 - **Trace replay adjusts recorded decisions** when controls differ from the
   recording: ids come from the current run, and a recorded retry is skipped if
   the call it retried succeeded this time. Each skip is logged as an event.
-- **Not built:** multi-provider routing and failover, OpenTelemetry/Jaeger,
-  the Providers, Invariants and Settings screens, keyboard shortcuts.
+- **The provider pool is tested with fake providers only.** Routing, failover,
+  rate limiting, circuit breaking and health checks have never run against a
+  real provider API.
+- **Failover happens between runs, not inside one.** If the chosen provider
+  fails mid-run, that run ends with an LLM error rather than switching model.
 - **CI has not run on GitHub yet.** The workflow is in the repo; nothing has
   been pushed.
 

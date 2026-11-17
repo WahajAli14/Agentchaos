@@ -38,11 +38,22 @@ Each screen was captured in dark and light and reviewed against spec section 4.
 - **Runs:** yes. Dense 32px rows, sortable, filter state in the URL.
 - **Scenarios:** yes after fix 2.
 
+## Round 2: Invariants, Providers, Settings, keyboard
+
+| # | Screen | Finding | Fix |
+|---|---|---|---|
+| 9 | Invariants | Example-records table overflowed the pane; long JSON did not wrap. | Fixed table layout, detail column breaks anywhere. |
+| 10 | Providers | Disabled providers showed no model or priority and sorted last in arbitrary order. | Disabled rows keep their configured model and priority; the table is in routing order. |
+| 11 | Runs | Keyboard cursor used stale state when keys were pressed quickly. | Cursor position kept in a ref; covered by an end-to-end test. |
+
+Verdicts: Invariants and Providers read as operational tables and pass.
+Settings is a plain read-only table; acceptable, not a showcase screen.
+
 ## Known gaps (not fixed)
 
-- Keyboard shortcuts (j/k, enter, r, /, ?) are P2 and not built. Focus rings and
-  tab order work.
-- Nav has three items. Invariants, Providers and Settings are P2 screens.
+- Providers and the live-model table have only been seen with no key configured
+  (all providers disabled, no live runs). Their populated states are covered by
+  API tests, not by a screenshot.
 - On the Scenarios evidence table the longest config name (`idempotency_client_only`)
   touches the next column at 1440px.
 - Screens are designed for 1280px and wider only, as specified.

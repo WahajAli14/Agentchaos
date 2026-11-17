@@ -43,3 +43,22 @@ Choices made where the spec was ambiguous. Simplest option taken each time.
 | D30 | After the agent finishes, the engine advances logical time past the orphan grace period before checking invariants. | Makes "orphaned" decidable in every run. |
 | D31 | The minimal run-detail page is static HTML served by the results API; the React app replaces it in P1. | Day 2 asks for a plain timeline from real data, no polish. |
 | D32 | `Makefile` exports `PYTHONPATH=src`. | macOS marks the editable-install `.pth` hidden and Python 3.12 skips it. |
+
+## P1 and P2 (2026-11-17)
+
+| # | Decision | Why |
+|---|---|---|
+| D33 | P2 was started while one P1 item is open: live smoke runs, which need a provider key in `.env`. | The owner asked for everything to be implemented; the open item is blocked on a key only the owner can add. |
+| D34 | Live agent tools are the five workflow calls plus three reads and three undo calls. Each call goes through the same controls and proxy as the scripted agent. | A realistic assistant can look things up and undo; the controls must see the same traffic either way. |
+| D35 | The live agent states its belief with a final `RESULT: SUCCESS` or `RESULT: FAILED` line; anything else is recorded as `unknown`. | Needed to compare what the agent reports with database state. |
+| D36 | Trace replay re-issues recorded tool calls. Id arguments come from the current run, and a recorded retry is skipped when the call it retried (ambiguous in the recording) succeeds this time. Skips are logged as events. | A retry was a decision conditional on a failure; replaying it unconditionally under a control would create a duplicate the agent never chose. |
+| D37 | Live-mode latency is measured wall time of the agent loop; the live agent and provider client are the only modules allowed to read real time (enforced by the source scan). | The model call is real; everything it calls still runs on the logical clock. |
+| D38 | Estimated cost for runs with no LLM call is 0, not unknown. | Nothing was used, so there is nothing to estimate. |
+| D39 | The pool pins one provider per run. A mid-run provider failure ends that run with an LLM error; failover happens at the next selection. | Spec: never mix models in one statistic. |
+| D40 | Health check = one tool-calling probe per provider. It does not separately list models. | A successful tool call proves the model id exists and supports tools; one request instead of two against free-tier quotas. |
+| D41 | The API runs scenarios on its own copy of the mock services (`data/api-services`), not the standalone service containers. | Runs need the shared logical clock, which only the in-process cluster has. |
+| D42 | The React app is served by the API process; the two static HTML pages remain as a fallback when the frontend is not built. | One container, no separate web server. |
+| D43 | The Tailwind theme is replaced, not extended. | Banned styles (default palettes, large radii, shadows) then do not exist as classes. |
+| D44 | Benchmark "variance" is the population variance of invariant violations per run within a cell. | The spec asks for variance without defining it; outcome classes are categorical. |
+| D45 | Tracing is enabled only by the API process and only if a collector answers at the configured endpoint. | `.env.example` always sets an endpoint; without the check every local run would log export errors. |
+
