@@ -216,4 +216,4 @@ def app() -> FastAPI:
     # the standalone service processes.
     cluster = ServiceCluster(settings.data_dir / "api-services", seed=settings.default_seed)
     engine = Engine(cluster, store, settings.data_dir / "api-control")
-    return create_app(store, engine)
+    return create_app(store, engine, settings.web_dist)

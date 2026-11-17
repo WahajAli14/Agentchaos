@@ -58,6 +58,8 @@ class Settings(BaseSettings):
     live_mode_enabled: bool = Field(default=False, alias="AGENTCHAOS_LIVE_MODE_ENABLED")
     # Not part of `.env`; optional override used by Docker Compose and tests.
     data_dir: Path = Field(default=Path("data"), alias="AGENTCHAOS_DATA_DIR")
+    # Built frontend to serve; defaults to web/dist next to the source tree.
+    web_dist: Path | None = Field(default=None, alias="AGENTCHAOS_WEB_DIST")
 
     @field_validator(
         "groq_api_key",
