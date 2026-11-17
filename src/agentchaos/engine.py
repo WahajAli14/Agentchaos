@@ -39,6 +39,7 @@ from agentchaos.proxy import FaultProxy, GroundTruthTracker, Recorder
 from agentchaos.results.states import Classification, ExecutionState
 from agentchaos.results.store import ResultsStore, RunMetrics
 from agentchaos.services.cluster import ServiceCluster
+from agentchaos.tracing import get_tracer
 from agentchaos.workflows.order import OrderWorkflow
 
 
@@ -173,6 +174,29 @@ class Engine:
     ) -> RunSummary:
         """Run one scenario. `agent_factory` swaps the scripted agent for a live
         LLM agent or a trace replay; `provider` is recorded for live runs."""
+        with get_tracer().start_as_current_span("agentchaos.run") as span:
+            span.set_attribute("agentchaos.scenario", config.scenario)
+            span.set_attribute("agentchaos.seed", config.seed)
+            span.set_attribute("agentchaos.mode", config.mode)
+            span.set_attribute("agentchaos.fault_type", config.fault_type or "none")
+            span.set_attribute("agentchaos.controls", ",".join(sorted(config.controls)) or "none")
+            summary = await self._run(config, agent_factory, provider, order)
+            span.set_attribute("agentchaos.run_id", summary.run_id)
+            span.set_attribute("agentchaos.execution_state", summary.state.value)
+            span.set_attribute(
+                "agentchaos.classification",
+                summary.classification.value if summary.classification else "none",
+            )
+            span.set_attribute("agentchaos.invariants_passed", summary.report.passed)
+            return summary
+
+    async def _run(
+        self,
+        config: RunConfig,
+        agent_factory: "AgentFactory | None",
+        provider: ProviderConfig | None,
+        order: dict[str, Any] | None,
+    ) -> RunSummary:
         cluster, store = self.cluster, self.store
         rng = random.Random(config.seed)
         seeded_order = workflow_input(rng)

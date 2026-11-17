@@ -15,11 +15,23 @@ x-service: &service
     retries: 5
 
 services:
+  # Trace UI on http://localhost:16686 (one trace per run).
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports: ["16686:16686", "4317:4317"]
   # Results API and run-detail timeline: http://localhost:8100
   api:
     <<: *service
     command: ["uvicorn", "agentchaos.api:app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
     ports: ["8100:8000"]
+    environment:
+      AGENTCHAOS_DATA_DIR: /app/data
+      # Not a secret: where the API sends traces inside the Compose network.
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+    depends_on:
+      - jaeger
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(urllib.request.urlopen('http://localhost:8000/api/runs').status != 200)"]
       interval: 5s

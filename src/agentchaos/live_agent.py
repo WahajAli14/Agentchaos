@@ -25,6 +25,7 @@ from agentchaos.interfaces import (
 )
 from agentchaos.llm import LLMError, LLMProvider
 from agentchaos.proxy import Recorder
+from agentchaos.tracing import get_tracer
 
 SYSTEM_PROMPT = """You are the order-processing assistant for a wholesale supplier.
 You fulfil customer orders by calling the company's internal APIs through the tools provided.
@@ -294,11 +295,18 @@ class LiveAgent:
         believed, final_text = "unknown", None
         started = time.perf_counter()
         for turn in range(1, self._max_turns + 1):
-            try:
-                reply = await self._provider.chat(messages, schemas)
-            except LLMError as error:
-                self._recorder.emit("agent", "llm_error", turn=turn, error=str(error))
-                break
+            with get_tracer().start_as_current_span("agentchaos.llm.chat") as span:
+                span.set_attribute("gen_ai.system", self._provider.name)
+                span.set_attribute("gen_ai.request.model", self._provider.model)
+                span.set_attribute("agentchaos.turn", turn)
+                try:
+                    reply = await self._provider.chat(messages, schemas)
+                except LLMError as error:
+                    span.set_attribute("agentchaos.llm_error", True)
+                    self._recorder.emit("agent", "llm_error", turn=turn, error=str(error))
+                    break
+                span.set_attribute("gen_ai.usage.input_tokens", reply.prompt_tokens)
+                span.set_attribute("gen_ai.usage.output_tokens", reply.completion_tokens)
             llm_calls += 1
             prompt_tokens += reply.prompt_tokens
             completion_tokens += reply.completion_tokens

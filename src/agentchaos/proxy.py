@@ -11,6 +11,7 @@ import httpx
 from agentchaos.interfaces import FaultPolicy, ProxyRequest, ProxyResponse
 from agentchaos.results.store import ResultsStore
 from agentchaos.services.cluster import ServiceCluster
+from agentchaos.tracing import get_tracer
 
 DOMAIN_TABLES: dict[str, tuple[tuple[str, str], ...]] = {
     "orders": (("orders", "id"),),
@@ -136,6 +137,22 @@ class FaultProxy:
         return ProxyResponse(response.status_code, response.json())
 
     async def send(self, request: ProxyRequest) -> ProxyResponse:
+        with get_tracer().start_as_current_span("agentchaos.proxy.send") as span:
+            span.set_attribute("agentchaos.step", request.step)
+            span.set_attribute("agentchaos.purpose", request.purpose)
+            span.set_attribute("agentchaos.attempt", request.attempt)
+            span.set_attribute("http.request.method", request.request.method)
+            span.set_attribute("url.path", request.request.path)
+            span.set_attribute("agentchaos.service", request.request.service)
+            before = self.injections
+            result = await self._send(request)
+            span.set_attribute("agentchaos.fault_injected", self.injections > before)
+            span.set_attribute("agentchaos.timed_out", result.timed_out)
+            if result.status_code is not None:
+                span.set_attribute("http.response.status_code", result.status_code)
+            return result
+
+    async def _send(self, request: ProxyRequest) -> ProxyResponse:
         self.calls += 1
         decision = self._policy.decide(request) if self._policy else None
         action = decision.action if decision else "pass"

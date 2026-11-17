@@ -34,6 +34,7 @@ from agentchaos.metrics import (
 )
 from agentchaos.results.store import ResultsStore
 from agentchaos.services.cluster import ServiceCluster
+from agentchaos.tracing import setup_tracing
 
 STATIC = Path(__file__).parent / "static"
 WEB_DIST = Path(__file__).resolve().parents[2] / "web" / "dist"
@@ -268,6 +269,7 @@ def create_app(
 def app() -> FastAPI:
     settings = get_settings()
     log_provider_statuses(settings)
+    setup_tracing(settings.otel_exporter_otlp_endpoint)
     store = ResultsStore(settings.results_db_path)
     # The API runs scenarios on its own copy of the mock services, separate from
     # the standalone service processes.

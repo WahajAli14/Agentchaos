@@ -163,6 +163,8 @@ class ProviderPool:
     members: list[Member]
     now: Now = time.monotonic
     disabled: dict[str, str] = field(default_factory=dict)
+    # Config of providers that are listed but not enabled, for display.
+    disabled_configs: dict[str, ProviderConfig] = field(default_factory=dict)
     failovers: list[FailoverEvent] = field(default_factory=list)
 
     @classmethod
@@ -195,12 +197,14 @@ class ProviderPool:
         """Every provider with a key or URL in settings. Others are listed as disabled."""
         providers: list[LLMProvider] = []
         disabled: dict[str, str] = {}
+        disabled_configs: dict[str, ProviderConfig] = {}
         masked: dict[str, str] = {}
         for config in configs if configs is not None else load_provider_configs():
             if config.key_env is not None and config.base_url is not None:
                 key = settings.provider_key(config.name)
                 if key is None:
                     disabled[config.name] = "disabled: no key"
+                    disabled_configs[config.name] = config
                     continue
                 masked[config.name] = mask_secret(key.get_secret_value())
                 providers.append(OpenAICompatibleProvider(config, config.base_url, key, client))
@@ -208,13 +212,16 @@ class ProviderPool:
                 base = settings.ollama_base_url
                 if base is None:
                     disabled[config.name] = "disabled: no base URL"
+                    disabled_configs[config.name] = config
                     continue
                 providers.append(
                     OpenAICompatibleProvider(config, f"{base.rstrip('/')}/v1", None, client)
                 )
         for name, reason in disabled.items():
             logger.info("provider %s %s", name, reason)
-        return cls.from_providers(providers, disabled=disabled, masked_keys=masked)
+        pool = cls.from_providers(providers, disabled=disabled, masked_keys=masked)
+        pool.disabled_configs = disabled_configs
+        return pool
 
     async def health_check(self) -> None:
         """One tiny tool-calling probe per provider; disable any that fail, and say why."""
@@ -287,8 +294,12 @@ class ProviderPool:
         rows.extend(
             {
                 "name": name,
-                "model": None,
-                "priority": None,
+                "model": self.disabled_configs[name].model
+                if name in self.disabled_configs
+                else None,
+                "priority": self.disabled_configs[name].priority
+                if name in self.disabled_configs
+                else None,
                 "enabled": False,
                 "healthy": False,
                 "health_checked": False,
@@ -302,7 +313,7 @@ class ProviderPool:
             }
             for name, reason in self.disabled.items()
         )
-        return rows
+        return sorted(rows, key=lambda row: (row["priority"] is None, row["priority"] or 0))
 
     def failover_log(self) -> list[dict[str, Any]]:
         return [
