@@ -109,6 +109,66 @@ export interface Scenarios {
   controls: { name: string; description: string }[];
 }
 
+export interface InvariantBreakdown {
+  invariant: string;
+  description: string;
+  runs_checked: number;
+  runs_violated: number;
+  violations: number;
+  by_cell: { fault_type: string; controls: string; runs_violated: number; violations: number }[];
+  examples: (Violation & { run_id: string })[];
+}
+
+export interface ProviderStatus {
+  name: string;
+  model: string | null;
+  priority: number | null;
+  enabled: boolean;
+  healthy: boolean;
+  health_checked: boolean;
+  reason: string | null;
+  masked_key: string;
+  supports_tools: boolean | null;
+  circuit: string | null;
+  rate_limit: { used_last_minute: number; rpm: number | null; used_last_day: number; rpd: number | null } | null;
+  calls: number;
+  failures: number;
+}
+
+export interface LiveModel {
+  provider: string;
+  model: string;
+  runs: number;
+  outcomes: Record<string, number>;
+  verified_runs: number;
+  llm_calls: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  billed_cost_usd: number;
+  estimated_cost_usd: number | null;
+  tokens_per_verified_run: number | null;
+  llm_calls_per_verified_run: number | null;
+  latency_p50_ms: number | null;
+  latency_p95_ms: number | null;
+  note: string;
+}
+
+export interface Providers {
+  providers: ProviderStatus[];
+  failovers: { skipped: string; reason: string; chosen: string | null }[];
+  live_models: LiveModel[];
+}
+
+export interface AppSettings {
+  env: string;
+  default_seed: number;
+  live_mode_enabled: boolean;
+  data_dir: string;
+  results_db: string;
+  otel_endpoint: string | null;
+  runs_stored: number;
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -145,6 +205,13 @@ export const api = {
   batches: () => request<Batch[]>("/api/batches"),
   benchmark: (batch?: string) =>
     request<Benchmark>(`/api/benchmark${batch ? `?batch_id=${encodeURIComponent(batch)}` : ""}`),
+  invariants: (batch?: string) =>
+    request<{ batch_id: string | null; invariants: InvariantBreakdown[] }>(
+      `/api/invariants${batch ? `?batch_id=${encodeURIComponent(batch)}` : ""}`,
+    ),
+  providers: () => request<Providers>("/api/providers"),
+  checkProviders: () => request<{ providers: ProviderStatus[] }>("/api/providers/check", { method: "POST" }),
+  settings: () => request<AppSettings>("/api/settings"),
   startRun: (body: { fault_type: string | null; controls: string[]; seed: number; target_step: string | null }) =>
     request<{ run_id: string }>("/api/runs", { method: "POST", body: JSON.stringify(body) }),
   startBenchmark: (seeds: number) =>

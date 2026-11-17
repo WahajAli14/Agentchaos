@@ -9,7 +9,7 @@ test("@demo failure, explanation, fix, benchmark", async ({ page }) => {
   await pause();
   await page.getByLabel("Step the fault hits").selectOption("create_invoice");
   await pause(800);
-  await page.getByRole("button", { name: "Run scenario" }).click();
+  await page.getByRole("button", { name: /Run scenario/ }).click();
   await expect(page.getByTestId("run-detail")).toBeVisible();
   await pause(2200);
   await page.getByTestId("mismatch").scrollIntoViewIfNeeded();
@@ -19,7 +19,7 @@ test("@demo failure, explanation, fix, benchmark", async ({ page }) => {
   await page.getByLabel("Step the fault hits").selectOption("create_invoice");
   await page.getByLabel(/verify_after_write/).check();
   await pause(1000);
-  await page.getByRole("button", { name: "Run scenario" }).click();
+  await page.getByRole("button", { name: /Run scenario/ }).click();
   await expect(page.getByTestId("run-detail").locator('[data-outcome="verified_recovery"]')).toBeVisible();
   await pause(2600);
 

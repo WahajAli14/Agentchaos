@@ -33,12 +33,24 @@ for (const theme of ["dark", "light"] as const) {
     await page.setViewportSize({ width: 1440, height: 1000 });
 
     await page.goto("/scenarios/timeout_after_commit");
-    await expect(page.getByRole("button", { name: "Run scenario" })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Run scenario/ })).toBeVisible();
     await page.screenshot({ path: `${SHOTS}/scenarios-${theme}.png` });
 
     await page.goto("/runs?batch=batch_000001");
-    await expect(page.locator("tbody tr").first()).toBeVisible();
+    await expect(page.locator("#row-run_000360")).toBeVisible();
     await page.screenshot({ path: `${SHOTS}/runs-${theme}.png` });
+
+    await page.goto("/invariants/reserved_stock_matches_confirmed_orders?batch=batch_000001");
+    await expect(page.getByText("Example violating records")).toBeVisible();
+    await page.screenshot({ path: `${SHOTS}/invariants-${theme}.png` });
+
+    await page.goto("/providers");
+    await expect(page.getByText("Configured providers, in routing order")).toBeVisible();
+    await page.screenshot({ path: `${SHOTS}/providers-${theme}.png` });
+
+    await page.goto("/settings");
+    await expect(page.getByText("AGENTCHAOS_DEFAULT_SEED")).toBeVisible();
+    await page.screenshot({ path: `${SHOTS}/settings-${theme}.png` });
   });
 }
 
@@ -47,7 +59,7 @@ test("run a scenario from the UI, read its timeline, then the benchmark updates"
   await expect(page).toHaveURL(/\/scenarios/);
   await page.getByRole("link", { name: /timeout_after_commit/ }).click();
   await page.getByLabel("Step the fault hits").selectOption("create_invoice");
-  await page.getByRole("button", { name: "Run scenario" }).click();
+  await page.getByRole("button", { name: /Run scenario/ }).click();
 
   // Controls off: the failure is reproduced and explained on the timeline.
   await expect(page).toHaveURL(/\/runs\/run_\d+/);
@@ -65,7 +77,7 @@ test("run a scenario from the UI, read its timeline, then the benchmark updates"
   await page.goto("/scenarios/timeout_after_commit");
   await page.getByLabel("Step the fault hits").selectOption("create_invoice");
   await page.getByLabel(/verify_after_write/).check();
-  await page.getByRole("button", { name: "Run scenario" }).click();
+  await page.getByRole("button", { name: /Run scenario/ }).click();
   await expect(page.getByTestId("run-detail").locator('[data-outcome="verified_recovery"]')).toBeVisible();
   expect(page.url()).not.toBe(failedUrl);
 
@@ -92,4 +104,43 @@ test("an unknown run shows the real error and a retry", async ({ page }) => {
   await page.goto("/runs/run_999999");
   await expect(page.getByRole("alert")).toContainText("HTTP 404");
   await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();
+});
+
+test("keyboard: j/k and Enter in Runs, slash to filter, r to run, ? for help", async ({ page }) => {
+  await page.goto("/runs?batch=batch_000001&sort=run_id&dir=asc");
+  await expect(page.locator("#row-run_000001")).toBeVisible();
+  await page.keyboard.press("j");
+  await page.keyboard.press("j");
+  await page.keyboard.press("k");
+  await expect(page.locator('tr[data-cursor="true"]')).toContainText("run_000001");
+  await page.keyboard.press("j");
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/\/runs\/run_000002/);
+  await expect(page.getByTestId("run-detail")).toContainText("run_000002");
+
+  await page.keyboard.press("/");
+  await expect(page.getByLabel("Filter runs")).toBeFocused();
+  await page.keyboard.type("j");
+  await expect(page.getByLabel("Filter runs")).toHaveValue("j");
+  await page.keyboard.press("Escape");
+
+  await page.keyboard.press("?");
+  await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+
+  await page.goto("/scenarios/timeout_after_commit");
+  await expect(page.getByRole("button", { name: /Run scenario/ })).toBeVisible();
+  await page.keyboard.press("j");
+  await expect(page).toHaveURL(/\/scenarios\/duplicate_delivery/);
+  await page.keyboard.press("r");
+  await expect(page).toHaveURL(/\/runs\/run_\d+/);
+  await expect(page.getByTestId("run-detail")).toContainText("duplicate_delivery");
+});
+
+test("providers screen never shows a key and explains disabled providers", async ({ page }) => {
+  await page.goto("/providers");
+  await expect(page.getByText("disabled: no key").first()).toBeVisible();
+  await expect(page.getByText("No live runs stored")).toBeVisible();
+  expect(await page.content()).not.toMatch(/gsk_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9]{20,}/);
 });

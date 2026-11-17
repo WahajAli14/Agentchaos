@@ -1,11 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { PageHeader } from "../components/Layout";
 import { OUTCOME_STYLE, OutcomeBadge } from "../components/OutcomeBadge";
 import { Code, EmptyState, ErrorState, SkeletonBlock } from "../components/States";
 import { api, controlsLabel, outcomeOf, type Outcome } from "../lib/api";
 import { fixed, OUTCOME_ORDER } from "../lib/format";
+import { useKeys } from "../lib/useKeys";
 
 const BASELINE = { fault_type: "no_fault", description: "No fault is injected. The workflow should end verified.", eligible_steps: [] as string[] };
 
@@ -28,6 +29,18 @@ export function ScenariosPage() {
       navigate(`/runs/${run_id}?batch=adhoc`);
     },
   });
+
+  const formRef = useRef<HTMLFormElement>(null);
+  useKeys({
+    r: () => formRef.current?.requestSubmit(),
+    j: () => stepScenario(1),
+    k: () => stepScenario(-1),
+  });
+  const names = [...(scenarios.data?.faults.map((f) => f.fault_type) ?? []), "no_fault"];
+  const stepScenario = (step: number) => {
+    const next = names[names.indexOf(fault) + step];
+    if (next) navigate(`/scenarios/${next}`);
+  };
 
   if (scenarios.isPending) return <SkeletonBlock lines={10} />;
   if (scenarios.isError) return <ErrorState error={scenarios.error} retry={() => scenarios.refetch()} />;
@@ -66,7 +79,7 @@ export function ScenariosPage() {
           <div className="min-w-0">
           <h2 className="font-mono text-lg font-semibold">{selected.fault_type}</h2>
           <p className="mt-1 max-w-2xl text-muted">{selected.description}</p>
-          <form className="mt-4 max-w-2xl space-y-4" onSubmit={(e) => {
+          <form ref={formRef} className="mt-4 max-w-2xl space-y-4" onSubmit={(e) => {
             e.preventDefault();
             start.mutate({
               fault_type: selected.fault_type === "no_fault" ? null : selected.fault_type,
@@ -103,7 +116,7 @@ export function ScenariosPage() {
               )}
               <button type="submit" disabled={start.isPending || !scenarios.data.can_run}
                 className="h-8 rounded bg-accent px-3 text-sm font-medium text-accent-text transition-opacity disabled:opacity-50">
-                {start.isPending ? "Running…" : "Run scenario"}
+                {start.isPending ? "Running…" : "Run scenario"} <span className="font-mono opacity-70">r</span>
               </button>
             </div>
             {!scenarios.data.can_run && <p className="text-xs text-muted">This server is read-only; runs cannot be started here.</p>}

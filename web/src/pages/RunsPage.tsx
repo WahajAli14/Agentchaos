@@ -1,11 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { PageHeader } from "../components/Layout";
 import { OutcomeBadge } from "../components/OutcomeBadge";
 import { Code, EmptyState, ErrorState, SkeletonRows } from "../components/States";
 import { SortIcon } from "../components/icons";
 import { api, controlsLabel, outcomeOf, type Run } from "../lib/api";
+import { useKeys } from "../lib/useKeys";
 import { RunDetailPane } from "./RunDetailPane";
 
 type SortKey = "run_id" | "fault_type" | "controls" | "seed" | "outcome";
@@ -66,6 +67,27 @@ export function RunsPage() {
 
   const select = (id: string) => navigate({ pathname: `/runs/${id}`, search: params.toString() });
 
+  // j/k move a cursor through the visible rows; Enter opens the row under it.
+  const searchRef = useRef<HTMLInputElement>(null);
+  const [cursor, setCursor] = useState<string | null>(null);
+  // The ref keeps rapid key presses correct between renders.
+  const cursorRef = useRef<string | null>(null);
+  const visible = rows.slice(0, MAX_ROWS);
+  const moveCursor = (step: number) => {
+    if (!visible.length) return;
+    const current = visible.findIndex((run) => run.run_id === (cursorRef.current ?? runId));
+    const next = visible[Math.min(visible.length - 1, Math.max(0, current + step))] ?? visible[0];
+    cursorRef.current = next.run_id;
+    setCursor(next.run_id);
+    document.getElementById(`row-${next.run_id}`)?.scrollIntoView({ block: "nearest" });
+  };
+  useKeys({
+    j: () => moveCursor(1),
+    k: () => moveCursor(-1),
+    Enter: () => cursorRef.current && select(cursorRef.current),
+    "/": () => searchRef.current?.focus(),
+  });
+
   return (
     <div className="flex h-full flex-col">
       <PageHeader title="Runs: every stored execution and its timeline">
@@ -77,8 +99,8 @@ export function RunsPage() {
             <option key={b.batch_id} value={b.batch_id}>{b.batch_id} ({b.runs})</option>
           ))}
         </select>
-        <input type="search" value={q} onChange={(e) => set("q", e.target.value)} aria-label="Filter runs"
-          placeholder="Filter by id, fault, outcome, seed"
+        <input ref={searchRef} type="search" value={q} onChange={(e) => set("q", e.target.value)} aria-label="Filter runs"
+          placeholder="Filter by id, fault, outcome, seed ( / )"
           className="h-7 w-64 rounded border border-border bg-surface px-2 text-xs placeholder:text-muted" />
       </PageHeader>
       <div className="flex min-h-0 flex-1">
@@ -117,11 +139,12 @@ export function RunsPage() {
                 <SkeletonRows columns={COLUMNS.length} rows={14} />
               ) : (
                 <tbody>
-                  {rows.slice(0, MAX_ROWS).map((run) => (
-                    <tr key={run.run_id} onClick={() => select(run.run_id)} aria-selected={run.run_id === runId}
+                  {visible.map((run) => (
+                    <tr key={run.run_id} id={`row-${run.run_id}`} onClick={() => select(run.run_id)}
+                      aria-selected={run.run_id === runId} data-cursor={run.run_id === cursor}
                       className={`h-row cursor-pointer border-b border-l-2 border-border transition-colors hover:bg-raised ${
                         run.run_id === runId ? "border-l-accent bg-raised" : "border-l-transparent"
-                      }`}>
+                      } ${run.run_id === cursor ? "outline outline-1 -outline-offset-1 outline-accent" : ""}`}>
                       <td className="px-2 font-mono text-xs">
                         <a href={`/runs/${run.run_id}`} onClick={(e) => { e.preventDefault(); select(run.run_id); }}>
                           {run.run_id}
