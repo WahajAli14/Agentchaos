@@ -161,12 +161,48 @@ AGENTCHAOS_LIVE_MODE_ENABLED=true   # in .env, plus one provider key
 make live RUNS=3
 ```
 
-**No live results are published here yet.** Live runs need a provider key and
-none has been configured in this checkout. The live agent, provider client and
-trace replay are tested against a scripted stand-in model only. When live runs
-exist they will be reported per model as "smoke test, n=K, not statistically
-meaningful". The model ids in `providers.yaml` have not been exercised against
-the real providers; the health check will report any that are wrong.
+### Live results: Groq `openai/gpt-oss-120b`
+
+**Smoke test, n=3 per scenario, not statistically meaningful.** Batch
+`live_000381`, 18 runs, seeds 42–44, all controls off and all three on. Every
+run completed; none was cut short by the provider.
+
+| Fault | Controls | Outcomes (from the databases) | What the agent reported |
+|---|---|---|---|
+| `timeout_after_commit` | none | 3 `undetected_violation` | success ×3 |
+| `timeout_after_commit` | all three | 3 `verified_recovery` | success ×3 |
+| `duplicate_delivery` | none | 3 `undetected_violation` | success ×3 |
+| `duplicate_delivery` | all three | 3 `verified_recovery` | success ×3 |
+| `partial_commit` | none | 2 `undetected_violation`, 1 `partial_recovery` | failed ×2, unknown ×1 |
+| `partial_commit` | all three | 3 `partial_recovery` | failed ×3 |
+
+What the model actually did:
+
+- **Lost response:** after the timeout it called the same tool again in all
+  three runs, exactly like the scripted naive agent. One duplicate invoice or
+  reservation committed each time, and it reported `RESULT: SUCCESS`.
+- **Duplicate delivery:** it saw one normal `201` and had no reason to suspect
+  anything. The duplicate committed and it reported success.
+- **Outage at `confirm_order`, controls off:** the model improvised. It retried,
+  released the reservation and reserved again, voided the invoice and issued a
+  new one, then cancelled the order. 16–20 tool calls, and 2–3 of those writes
+  committed as duplicates nobody undid. Its own recovery attempt caused the
+  violation. Up to 33k tokens per run, against about 6k for a clean run.
+- **Outage at `reserve_inventory`:** it retried, looked the order up, and
+  cancelled it. Consistent state, order not fulfilled (`partial_recovery`).
+- **All controls on:** the same improvisation happened (up to 4 duplicate
+  requests reached the services), but server-side idempotency replayed them, so
+  0 duplicate operations committed and every run ended consistent.
+
+Cost: $0 billed (free tier). Estimated at the list price configured in
+`providers.yaml`: $0.0010–0.0061 per run. Wall-clock agent time 4–118 s per run,
+mostly model latency.
+
+An earlier batch (`live_000363`) is kept in the results database but not
+reported: 6 of its 18 runs were ended by Groq rate limiting (HTTP 429), which
+says nothing about the agent. The client now honours `Retry-After`, and any
+run the provider still cuts short is recorded as `provider_error` and left out
+of per-model statistics.
 
 Every live run saves its tool-call trace to `data/traces/`. A trace can be
 replayed without an LLM, with different controls:
@@ -222,13 +258,14 @@ Needs Python 3.12, [uv](https://docs.astral.sh/uv/), Node 22 and Docker.
 - **Trace replay adjusts recorded decisions** when controls differ from the
   recording: ids come from the current run, and a recorded retry is skipped if
   the call it retried succeeded this time. Each skip is logged as an event.
-- **The provider pool is tested with fake providers only.** Routing, failover,
-  rate limiting, circuit breaking and health checks have never run against a
-  real provider API.
+- **The provider pool has run against one real provider (Groq) only.**
+  Failover and circuit breaking between providers are tested with fakes.
 - **Failover happens between runs, not inside one.** If the chosen provider
   fails mid-run, that run ends with an LLM error rather than switching model.
-- **CI has not run on GitHub yet.** The workflow is in the repo; nothing has
-  been pushed.
+- **CI has not completed a run on GitHub.** The first run ended in
+  `startup_failure` before any job was created; see the Actions tab.
+- **Live results are one model, n=3 per scenario.** They show the failure modes
+  happen with a real model; they are not rates.
 
 Design choices are logged in [DECISIONS.md](DECISIONS.md); the UI review is in
 [DESIGN_REVIEW.md](DESIGN_REVIEW.md).

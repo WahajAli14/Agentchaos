@@ -61,4 +61,6 @@ Choices made where the spec was ambiguous. Simplest option taken each time.
 | D43 | The Tailwind theme is replaced, not extended. | Banned styles (default palettes, large radii, shadows) then do not exist as classes. |
 | D44 | Benchmark "variance" is the population variance of invariant violations per run within a cell. | The spec asks for variance without defining it; outcome classes are categorical. |
 | D45 | Tracing is enabled only by the API process and only if a collector answers at the configured endpoint. | `.env.example` always sets an endpoint; without the check every local run would log export errors. |
+| D46 | Live runs ended by the provider (an `llm_error` event) are kept in the results database but excluded from per-model statistics, and counted separately. | A rate-limited run reflects provider quota, not agent behaviour; results stay append-only. |
+| D47 | On 429/5xx the client waits max(own exponential backoff, the provider's `Retry-After` or rate-limit reset header), capped at 60 s, up to 6 attempts. | The first Groq batch lost 6 of 18 runs to a 7-second total backoff. |
 
